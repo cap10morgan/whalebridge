@@ -1,0 +1,186 @@
+diff --git a/Sources/socktainer/Clients/ClientImageService.swift b/Sources/socktainer/Clients/ClientImageService.swift
+index b735214..0143526 100644
+--- a/Sources/socktainer/Clients/ClientImageService.swift
++++ b/Sources/socktainer/Clients/ClientImageService.swift
+@@ -4,6 +4,7 @@ import Containerization
+ import ContainerizationOCI
+ import Foundation
+ import Logging
++import Synchronization
+ import TerminalProgress
+ 
+ /// What was removed when deleting an image reference.
+@@ -18,11 +19,32 @@ struct ImageDeletionResult {
+     let deletedDigest: String?  // sha256 if the image layers were garbage-collected
+ }
+ 
++/// One message of the Docker image-pull progress stream (see moby's
++/// pkg/jsonmessage). Messages carrying an `id` and `progressDetail` with
++/// current/total render as an in-place progress bar in the Docker CLI;
++/// messages with only `status` print as plain lines.
++struct ImagePullProgressDetail: Codable, Sendable {
++    let current: Int64
++    let total: Int64?
++}
++
++struct ImagePullMessage: Codable, Sendable {
++    let status: String
++    let id: String?
++    let progressDetail: ImagePullProgressDetail?
++
++    init(status: String, id: String? = nil, progressDetail: ImagePullProgressDetail? = nil) {
++        self.status = status
++        self.id = id
++        self.progressDetail = progressDetail
++    }
++}
++
+ protocol ClientImageProtocol: Sendable {
+     func list(includeSystemImages: Bool) async throws -> [ClientImage]
+     func delete(id: String) async throws -> ImageDeletionResult
+     func pull(image: String, tag: String?, platform: Platform, logger: Logger) async throws -> AsyncThrowingStream<
+-        String, Error
++        ImagePullMessage, Error
+     >
+     func push(reference: String, platform: Platform?, logger: Logger) async throws -> AsyncThrowingStream<
+         String, Error
+@@ -192,7 +214,7 @@ struct ClientImageService: ClientImageProtocol {
+     }
+ 
+     func pull(image: String, tag: String?, platform: Platform, logger: Logger) async throws -> AsyncThrowingStream<
+-        String, Error
++        ImagePullMessage, Error
+     > {
+         let reference = try {
+             guard let tag, !tag.isEmpty else {
+@@ -211,9 +233,37 @@ struct ClientImageService: ClientImageProtocol {
+ 
+         logger.info("Pulling image reference: \(reference)")
+ 
++        // Docker CLIs key progress-bar lines on `id`; Apple Container reports
++        // aggregate bytes (not per-layer), so the whole download renders as one
++        // bar identified by the short reference (e.g. "alpine:3.20").
++        let progressID = reference.split(separator: "/").last.map(String.init) ?? reference
++
+         return AsyncThrowingStream { continuation in
+             logger.info("Starting to pull image \(reference) for platform \(platform.description)")
+-            continuation.yield("Trying to pull \(reference)")
++            continuation.yield(ImagePullMessage(status: "Trying to pull \(reference)"))
++            // Aggregate byte progress, throttled so the stream carries an
++            // update roughly every 256 KiB instead of one line per event.
++            let progressState = Mutex<(current: Int64, total: Int64, lastEmitted: Int64)>((0, 0, -1))
++            let emitProgress: @Sendable (_ mutate: @Sendable (inout (current: Int64, total: Int64, lastEmitted: Int64)) -> Void) -> Void = { mutate in
++                let snapshot: (current: Int64, total: Int64)? = progressState.withLock { state in
++                    mutate(&state)
++                    let significant = state.current - state.lastEmitted >= 262_144
++                    let complete = state.total > 0 && state.current >= state.total && state.lastEmitted != state.current
++                    guard significant || complete else { return nil }
++                    state.lastEmitted = state.current
++                    return (state.current, state.total)
++                }
++                if let snapshot {
++                    continuation.yield(
++                        ImagePullMessage(
++                            status: "Downloading",
++                            id: progressID,
++                            progressDetail: ImagePullProgressDetail(
++                                current: snapshot.current,
++                                total: snapshot.total > 0 ? snapshot.total : nil)
++                        ))
++                }
++            }
+             Task {
+                 do {
+                     let image = try await ClientImage.pull(
+@@ -227,28 +277,29 @@ struct ClientImageService: ClientImageProtocol {
+                                     .setSubDescription(let description),
+                                     .setItemsName(let description),
+                                     .custom(let description):
+-                                    continuation.yield(description)
+-                                case .addTotalSize(let size),
+-                                    .setTotalSize(let size),
+-                                    .addSize(let size),
+-                                    .setSize(let size):
+-                                    let humanReadableSize = ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+-                                    continuation.yield("Downloaded \(humanReadableSize)")
+-                                case .addTotalItems(let items),
+-                                    .setTotalItems(let items),
+-                                    .addItems(let items),
+-                                    .setItems(let items):
+-                                    continuation.yield("Processing \(items) layer\(items == 1 ? "" : "s")")
++                                    continuation.yield(ImagePullMessage(status: description))
++                                case .addTotalSize(let size):
++                                    emitProgress { $0.total += size }
++                                case .setTotalSize(let size):
++                                    emitProgress { $0.total = size }
++                                case .addSize(let size):
++                                    emitProgress { $0.current += size }
++                                case .setSize(let size):
++                                    emitProgress { $0.current = size }
+                                 default:
++                                    // Layer-count events add no information the
++                                    // progress bar doesn't already convey.
+                                     break
+                                 }
+                             }
+                         }
+                     )
+-                    continuation.yield("Unpacking image")
++                    continuation.yield(ImagePullMessage(status: "Download complete", id: progressID))
++                    continuation.yield(ImagePullMessage(status: "Extracting", id: progressID))
+                     try await image.unpack(platform: platform, progressUpdate: nil)
+                     logger.info("Successfully pulled image \(reference) for platform \(platform.description)")
+-                    continuation.yield("Image digest: \(image.digest)")
++                    continuation.yield(ImagePullMessage(status: "Pull complete", id: progressID))
++                    continuation.yield(ImagePullMessage(status: "Digest: \(image.digest)"))
+                     continuation.finish()
+                 } catch {
+                     // On arm64 hosts: if the image has no arm64 variant, fall back to amd64 (Rosetta).
+@@ -259,7 +310,7 @@ struct ClientImageService: ClientImageProtocol {
+                     {
+                         let amd64 = Platform(arch: "amd64", os: platform.os, variant: nil)
+                         logger.info("arm64 not available for \(reference), retrying with amd64 (Rosetta)")
+-                        continuation.yield("linux/arm64 not available — retrying with linux/amd64 (Rosetta)")
++                        continuation.yield(ImagePullMessage(status: "linux/arm64 not available — retrying with linux/amd64 (Rosetta)"))
+                         do {
+                             let fallbackImage = try await ClientImage.pull(
+                                 reference: reference,
+@@ -269,16 +320,16 @@ struct ClientImageService: ClientImageProtocol {
+                             )
+                             try await fallbackImage.unpack(platform: amd64, progressUpdate: nil)
+                             logger.info("Successfully pulled \(reference) for amd64 (Rosetta)")
+-                            continuation.yield("Image digest: \(fallbackImage.digest)")
++                            continuation.yield(ImagePullMessage(status: "Digest: \(fallbackImage.digest)"))
+                             continuation.finish()
+                         } catch let fallbackError {
+                             logger.error("amd64 fallback also failed for \(reference): \(fallbackError)")
+-                            continuation.yield(String(describing: fallbackError))
++                            continuation.yield(ImagePullMessage(status: String(describing: fallbackError)))
+                             continuation.finish(throwing: fallbackError)
+                         }
+                     } else {
+                         logger.error("Failed to pull image \(reference): \(error)")
+-                        continuation.yield(errMsg)
++                        continuation.yield(ImagePullMessage(status: errMsg))
+                         continuation.finish(throwing: error)
+                     }
+                 }
+diff --git a/Sources/socktainer/Routes/Images/ImageCreateRoute.swift b/Sources/socktainer/Routes/Images/ImageCreateRoute.swift
+index c9304cd..b96609f 100644
+--- a/Sources/socktainer/Routes/Images/ImageCreateRoute.swift
++++ b/Sources/socktainer/Routes/Images/ImageCreateRoute.swift
+@@ -54,10 +54,12 @@ extension ImageCreateRoute {
+             let pulledRef = "\(image)\(decodedTag.isEmpty ? "" : ":\(decodedTag)")"
+             response.body = .init(stream: { writer in
+                 Task {
++                    let encoder = JSONEncoder()
+                     do {
+                         for try await progress in progressStream {
+-                            let json = "{\"status\": \"\(progress.replacingOccurrences(of: "\"", with: "\\\""))\"}"  // Docker style
+-                            _ = writer.write(.buffer(ByteBuffer(string: json + "\n")))
++                            var buffer = ByteBuffer(data: try encoder.encode(progress))
++                            buffer.writeString("\n")
++                            _ = writer.write(.buffer(buffer))
+                         }
+                         _ = writer.write(.end)
+                         if let broadcaster = app.storage[EventBroadcasterKey.self] {

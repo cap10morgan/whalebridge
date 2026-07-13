@@ -1,0 +1,68 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D6EFFA"/>
+      <stop offset="1" stop-color="#9CD3EE"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0F6DA3"/>
+      <stop offset="1" stop-color="#093E63"/>
+    </linearGradient>
+    <clipPath id="squircle">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircle)">
+    <!-- sky -->
+    <rect x="100" y="100" width="824" height="824" fill="url(#sky)"/>
+
+    <!-- spandrel posts: drawn behind the whale so they only show between
+         deck and back; the two outer ones reach down to the water -->
+    <g fill="#E0533D">
+      <rect x="196" y="456" width="16" height="204" rx="7"/>
+      <rect x="298" y="456" width="16" height="120" rx="7"/>
+      <rect x="404" y="456" width="16" height="60" rx="7"/>
+      <rect x="604" y="456" width="16" height="60" rx="7"/>
+      <rect x="710" y="456" width="16" height="120" rx="7"/>
+      <rect x="812" y="456" width="16" height="204" rx="7"/>
+    </g>
+
+    <!-- whale: arched back forming the bridge span; belly arch cut out -->
+    <path fill="#1B3A5C" fill-rule="evenodd" d="
+      M 216 660
+      C 224 566, 268 486, 352 450
+      C 432 424, 592 424, 678 476
+      C 722 508, 748 585, 756 660
+      L 216 660 Z
+      M 384 660
+      C 396 570, 462 528, 512 528
+      C 562 528, 628 570, 640 660
+      L 384 660 Z"/>
+
+    <!-- tail: stem rising from the body into two flukes -->
+    <path fill="#1B3A5C" d="
+      M 720 660
+      C 744 628, 762 596, 770 554
+      C 774 530, 776 512, 774 494
+      C 790 516, 802 546, 804 570
+      C 822 548, 850 534, 878 532
+      C 862 554, 852 580, 850 604
+      C 846 648, 816 660, 788 660
+      L 720 660 Z"/>
+
+    <!-- eye -->
+    <circle cx="296" cy="556" r="11" fill="#EAF6FC"/>
+
+    <!-- bridge deck carried by the whale's back, shore to shore -->
+    <rect x="100" y="432" width="824" height="26" fill="#E0533D"/>
+
+    <!-- sea -->
+    <rect x="100" y="660" width="824" height="264" fill="url(#sea)"/>
+    <g stroke="#7FC3E4" stroke-width="12" stroke-linecap="round" fill="none" opacity="0.65">
+      <path d="M 190 736 H 380"/>
+      <path d="M 560 790 H 780"/>
+      <path d="M 300 848 H 480"/>
+    </g>
+  </g>
+</svg>

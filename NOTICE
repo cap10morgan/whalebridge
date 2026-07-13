@@ -1,0 +1,23 @@
+Whalebridge
+Copyright 2026 Wes Morgan
+
+Licensed under the Apache License, Version 2.0.
+
+This product bundles the following open-source software:
+
+socktainer (https://github.com/socktainer/socktainer)
+Copyright (c) 2025 Florent Benoit and contributors
+Licensed under the Apache License, Version 2.0.
+
+The socktainer daemon binary is built from sources pinned at a release tag
+(see vendor/socktainer) with minor modifications applied at build time (see
+patches/), and statically links, among others:
+
+  apple/container (https://github.com/apple/container) — Apache-2.0
+  apple/containerization (https://github.com/apple/containerization) — Apache-2.0
+  Vapor (https://github.com/vapor/vapor) — MIT
+
+A copy of the Apache License, Version 2.0 is available at
+https://www.apache.org/licenses/LICENSE-2.0
+
+Docker is a registered trademark of Docker, Inc.
