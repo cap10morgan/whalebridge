@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuView: View {
     @ObservedObject var daemon: DaemonManager
+    @ObservedObject var updater: Updater
 
     var body: some View {
         Text("Daemon: \(daemon.state.label)")
@@ -46,6 +47,13 @@ struct MenuView: View {
             ))
         Button("Copy DOCKER_HOST Export") { daemon.copyDockerHost() }
         Button("Open Daemon Log") { daemon.openLog() }
+
+        Divider()
+
+        if updater.isConfigured {
+            Button("Check for Updates…") { updater.checkForUpdates() }
+                .disabled(!updater.canCheckForUpdates)
+        }
 
         Divider()
 

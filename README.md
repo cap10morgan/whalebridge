@@ -35,6 +35,32 @@ make run      # bundle + launch
 make dev      # run the app unbundled via swift run (uses the vendor daemon build)
 ```
 
+## Releasing
+
+Updates are delivered with [Sparkle](https://sparkle-project.org). The app reads
+`SUFeedURL` and `SUPublicEDKey` from its Info.plist, both baked in by
+`scripts/bundle.sh` (override with the `APPCAST_URL` and `SUPUBLIC_ED_KEY` env
+vars). The matching private key lives in the release manager's login keychain —
+without it you cannot ship an update that existing installs will accept, so
+export a backup:
+
+```sh
+app/.build/artifacts/sparkle/Sparkle/bin/generate_keys -x whalebridge-eddsa.key
+```
+
+To cut a release, build a signed bundle, zip it, and regenerate the appcast that
+`SUFeedURL` points at:
+
+```sh
+SIGN_IDENTITY="Developer ID Application: …" VERSION=0.2.0 make bundle
+ditto -c -k --keepParent build/Whalebridge.app build/Whalebridge-0.2.0.zip
+app/.build/artifacts/sparkle/Sparkle/bin/generate_appcast build/
+```
+
+A real Developer ID (not the default ad-hoc signature) is required for releases:
+notarization needs the hardened runtime, which `bundle.sh` only enables when a
+signing identity is set.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE). Bundled components are listed in
