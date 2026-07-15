@@ -46,6 +46,10 @@ final class DaemonManager: ObservableObject {
             case .checking, .compatible: false
             }
         }
+
+        var isCompatible: Bool {
+            if case .compatible = self { true } else { false }
+        }
     }
 
     @Published private(set) var state: State = .stopped

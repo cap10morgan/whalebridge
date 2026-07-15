@@ -7,7 +7,11 @@ struct MenuView: View {
 
     var body: some View {
         Text("Daemon: \(daemon.state.label)")
-        Text("Apple container runtime: \(daemon.runtimeStatus.label)")
+        // A compatible runtime is table stakes, not status — only surface it
+        // when something needs the user's attention.
+        if !daemon.runtimeStatus.isCompatible {
+            Text("Apple container runtime: \(daemon.runtimeStatus.label)")
+        }
         if !daemon.runtimeStatus.needsInstall {
             Text("Apple container services: \(daemon.apiserverRunning ? "running" : "stopped")")
         }
