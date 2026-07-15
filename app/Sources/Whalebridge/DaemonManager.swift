@@ -210,25 +210,9 @@ final class DaemonManager: ObservableObject {
     /// Connect rather than stat: a stale socket file from a crashed daemon
     /// exists on disk but refuses connections.
     private func socketIsAccepting() -> Bool {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { close(fd) }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let capacity = MemoryLayout.size(ofValue: addr.sun_path)
-        guard socketPath.utf8.count < capacity else { return false }
-        withUnsafeMutablePointer(to: &addr.sun_path) { path in
-            path.withMemoryRebound(to: CChar.self, capacity: capacity) { dst in
-                _ = strlcpy(dst, socketPath, capacity)
-            }
-        }
-        let connected = withUnsafePointer(to: &addr) { raw in
-            raw.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                connect(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-        return connected == 0
+        guard let fd = try? UnixHTTP.connect(socketPath, timeoutSeconds: 1) else { return false }
+        close(fd)
+        return true
     }
 
     /// Once, on the first successful daemon start: if no other engine owns the

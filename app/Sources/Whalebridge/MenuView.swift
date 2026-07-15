@@ -3,12 +3,45 @@ import SwiftUI
 struct MenuView: View {
     @ObservedObject var daemon: DaemonManager
     @ObservedObject var updater: Updater
+    @ObservedObject var containers: ContainerStore = .shared
 
     var body: some View {
         Text("Daemon: \(daemon.state.label)")
         Text("Apple container runtime: \(daemon.runtimeStatus.label)")
         if !daemon.runtimeStatus.needsInstall {
             Text("Apple container services: \(daemon.apiserverRunning ? "running" : "stopped")")
+        }
+
+        if daemon.state == .running {
+            Divider()
+
+            Section("Containers") {
+                if containers.running.isEmpty {
+                    Text("None running")
+                }
+                ForEach(containers.running) { container in
+                    Menu(container.name) {
+                        Text("\(container.image) — \(container.status)")
+                        Divider()
+                        Button("Stop") { Task { await containers.stop(container) } }
+                        Button("Restart") { Task { await containers.restart(container) } }
+                        Button("Copy Name") { containers.copyName(container) }
+                    }
+                }
+                if !containers.stopped.isEmpty {
+                    Menu("Stopped") {
+                        ForEach(containers.stopped) { container in
+                            Menu(container.name) {
+                                Text("\(container.image) — \(container.status)")
+                                Divider()
+                                Button("Start") { Task { await containers.start(container) } }
+                                Button("Remove") { Task { await containers.remove(container) } }
+                                Button("Copy Name") { containers.copyName(container) }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Divider()

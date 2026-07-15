@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         _ = AppSettings.shared
         _ = Updater.shared
+        ContainerStore.shared.startPolling()
         Task {
             await DaemonManager.shared.bootstrap()
         }
