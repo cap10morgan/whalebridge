@@ -183,13 +183,52 @@ final class DaemonManager: ObservableObject {
         do {
             try daemon.run()
             process = daemon
-            state = .running
             try? "\(daemon.processIdentifier)".write(to: pidFileURL, atomically: true, encoding: .utf8)
-            try? DockerContext.ensureContext(socketPath: socketPath)
-            performFirstRunContextSetup()
         } catch {
             state = .failed(error.localizedDescription)
+            return
         }
+
+        await waitForSocket()
+        // stop() or an early daemon exit may have moved us on while we waited.
+        guard state == .starting else { return }
+        state = .running
+        try? DockerContext.ensureContext(socketPath: socketPath)
+        performFirstRunContextSetup()
+    }
+
+    /// socktainer needs a moment to bind its socket, so "running" should mean
+    /// "answering", not "spawned" — otherwise the first docker command races it.
+    private func waitForSocket() async {
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline && state == .starting {
+            if socketIsAccepting() { return }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    /// Connect rather than stat: a stale socket file from a crashed daemon
+    /// exists on disk but refuses connections.
+    private func socketIsAccepting() -> Bool {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let capacity = MemoryLayout.size(ofValue: addr.sun_path)
+        guard socketPath.utf8.count < capacity else { return false }
+        withUnsafeMutablePointer(to: &addr.sun_path) { path in
+            path.withMemoryRebound(to: CChar.self, capacity: capacity) { dst in
+                _ = strlcpy(dst, socketPath, capacity)
+            }
+        }
+        let connected = withUnsafePointer(to: &addr) { raw in
+            raw.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                connect(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        return connected == 0
     }
 
     /// Once, on the first successful daemon start: if no other engine owns the

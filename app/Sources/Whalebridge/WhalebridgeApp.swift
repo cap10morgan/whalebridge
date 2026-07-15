@@ -11,7 +11,7 @@ struct WhalebridgeApp: App {
         MenuBarExtra {
             MenuView(daemon: daemon, updater: updater)
         } label: {
-            Image(nsImage: daemon.state == .running ? MenuBarIcon.running : MenuBarIcon.stopped)
+            MenuBarLabel(daemon: daemon)
         }
 
         Settings {

@@ -17,8 +17,15 @@ xcrun actool --output-format human-readable-text --notices --warnings \
     --output-partial-info-plist "$OUT/partial.plist" \
     --compile "$OUT" "$ROOT/assets/Whalebridge.icon" >/dev/null
 
-# Single 36px (18pt @2x) template image; the app sets its point size to 18.
-mkdir -p "$ROOT/app/Sources/Whalebridge/Resources"
-rsvg-convert -w 36 -h 36 "$ROOT/assets/menubar.svg" -o "$ROOT/app/Sources/Whalebridge/Resources/MenuBarIcon.png"
+# Menu bar glyph plus the frames of its "starting up" tail flick, all 36px
+# (18pt @2x) templates; the app sets their point size to 18.
+RES="$ROOT/app/Sources/Whalebridge/Resources"
+mkdir -p "$RES"
+python3 "$ROOT/scripts/menubar.py"
+rm -f "$RES"/MenuBarIcon*.png
+rsvg-convert -w 36 -h 36 "$ROOT/assets/menubar.svg" -o "$RES/MenuBarIcon.png"
+for frame in "$ROOT"/assets/menubar-frames/*.svg; do
+    rsvg-convert -w 36 -h 36 "$frame" -o "$RES/MenuBarIcon-$(basename "$frame" .svg).png"
+done
 
-echo "generated build/icon/{Assets.car,Whalebridge.icns} and app MenuBarIcon.png"
+echo "generated build/icon/{Assets.car,Whalebridge.icns} and $(ls "$RES" | wc -l | tr -d ' ') menu bar PNGs"
