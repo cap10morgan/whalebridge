@@ -112,6 +112,12 @@ jobs:
           tmate -S /tmp/tmate.sock kill-session || true
           sudo container system status
 
+      - name: Configure the default kernel
+        # --enable-kernel-install on `system start` doesn't reliably take
+        # effect when driven non-interactively through tmate; `container
+        # create` fails with "default kernel not configured" without this.
+        run: sudo container system kernel set --recommended
+
       - name: Start socktainer
         run: |
           nohup sudo -i env \
