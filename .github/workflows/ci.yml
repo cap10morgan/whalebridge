@@ -9,7 +9,7 @@ jobs:
   test:
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Select latest Xcode 26
         run: |
@@ -17,7 +17,7 @@ jobs:
           swift --version
 
       - name: Cache SwiftPM
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             app/.build
@@ -38,7 +38,7 @@ jobs:
   daemon:
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
 
@@ -48,7 +48,7 @@ jobs:
           swift --version
 
       - name: Cache daemon build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: vendor/socktainer/.build
           key: daemon-${{ runner.os }}-${{ hashFiles('vendor/socktainer/Package.resolved', 'patches/*.patch') }}

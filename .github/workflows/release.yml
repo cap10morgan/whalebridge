@@ -16,7 +16,7 @@ jobs:
       HAVE_SIGNING_CERT: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
       HAVE_NOTARY_KEY: ${{ secrets.APPLE_API_KEY_P8 != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
 
