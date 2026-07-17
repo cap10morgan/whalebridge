@@ -184,3 +184,64 @@ index c9304cd..b96609f 100644
                          }
                          _ = writer.write(.end)
                          if let broadcaster = app.storage[EventBroadcasterKey.self] {
+diff --git a/Tests/socktainerTests/Events/ImageDeleteEventTests.swift b/Tests/socktainerTests/Events/ImageDeleteEventTests.swift
+index 8f3b81f..0e7da74 100644
+--- a/Tests/socktainerTests/Events/ImageDeleteEventTests.swift
++++ b/Tests/socktainerTests/Events/ImageDeleteEventTests.swift
+@@ -134,7 +134,7 @@ private struct DanglingImageDeleteMock: ClientImageProtocol {
+         ImageDeletionResult(untagged: untagged, digest: "sha256:abc123", deletedDigest: "sha256:abc123")
+     }
+     func pull(image: String, tag: String?, platform: Platform, logger: Logger) async throws
+-        -> AsyncThrowingStream<String, Error>
++        -> AsyncThrowingStream<ImagePullMessage, Error>
+     { AsyncThrowingStream { $0.finish() } }
+     func push(reference: String, platform: Platform?, logger: Logger) async throws
+         -> AsyncThrowingStream<String, Error>
+@@ -155,7 +155,7 @@ private struct ImageDeleteMock: ClientImageProtocol {
+         ImageDeletionResult(untagged: "docker.io/library/\(id)", digest: digest, deletedDigest: nil)
+     }
+     func pull(image: String, tag: String?, platform: Platform, logger: Logger) async throws
+-        -> AsyncThrowingStream<String, Error>
++        -> AsyncThrowingStream<ImagePullMessage, Error>
+     {
+         AsyncThrowingStream { $0.finish() }
+     }
+diff --git a/Tests/socktainerTests/Events/NewEventsTests.swift b/Tests/socktainerTests/Events/NewEventsTests.swift
+index 0c99102..0829cf7 100644
+--- a/Tests/socktainerTests/Events/NewEventsTests.swift
++++ b/Tests/socktainerTests/Events/NewEventsTests.swift
+@@ -436,7 +436,7 @@ private struct StubImageClient: ClientImageProtocol {
+         ImageDeletionResult(untagged: id, digest: "sha256:abc", deletedDigest: nil)
+     }
+     func pull(image: String, tag: String?, platform: Platform, logger: Logger) async throws
+-        -> AsyncThrowingStream<String, Error>
++        -> AsyncThrowingStream<ImagePullMessage, Error>
+     {
+         AsyncThrowingStream { $0.finish() }
+     }
+diff --git a/Tests/socktainerTests/Routes/ImageDeleteDanglingResponseTests.swift b/Tests/socktainerTests/Routes/ImageDeleteDanglingResponseTests.swift
+index ddd0d93..817226f 100644
+--- a/Tests/socktainerTests/Routes/ImageDeleteDanglingResponseTests.swift
++++ b/Tests/socktainerTests/Routes/ImageDeleteDanglingResponseTests.swift
+@@ -102,7 +102,7 @@ private struct FixedResultImageMock: ClientImageProtocol {
+     let result: ImageDeletionResult
+     func list(includeSystemImages: Bool) async throws -> [ClientImage] { [] }
+     func delete(id: String) async throws -> ImageDeletionResult { result }
+-    func pull(image: String, tag: String?, platform: Platform, logger: Logger) async throws -> AsyncThrowingStream<String, Error> {
++    func pull(image: String, tag: String?, platform: Platform, logger: Logger) async throws -> AsyncThrowingStream<ImagePullMessage, Error> {
+         AsyncThrowingStream { $0.finish() }
+     }
+     func push(reference: String, platform: Platform?, logger: Logger) async throws -> AsyncThrowingStream<String, Error> {
+diff --git a/Tests/socktainerTests/Routes/Server/InfoRouteTests.swift b/Tests/socktainerTests/Routes/Server/InfoRouteTests.swift
+index bfcff86..42e408c 100644
+--- a/Tests/socktainerTests/Routes/Server/InfoRouteTests.swift
++++ b/Tests/socktainerTests/Routes/Server/InfoRouteTests.swift
+@@ -52,7 +52,7 @@ private struct EmptyContainerClient: ClientContainerProtocol {
+ private struct StubImageClient: ClientImageProtocol {
+     func list(includeSystemImages: Bool) async throws -> [ClientImage] { [] }
+     func delete(id: String) async throws -> ImageDeletionResult { ImageDeletionResult(untagged: id, digest: "sha256:abc", deletedDigest: nil) }
+-    func pull(image: String, tag: String?, platform: Platform, logger: Logger) async throws -> AsyncThrowingStream<String, Error> {
++    func pull(image: String, tag: String?, platform: Platform, logger: Logger) async throws -> AsyncThrowingStream<ImagePullMessage, Error> {
+         AsyncThrowingStream { $0.finish() }
+     }
+     func push(reference: String, platform: Platform?, logger: Logger) async throws -> AsyncThrowingStream<String, Error> {
