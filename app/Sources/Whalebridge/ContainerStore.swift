@@ -91,7 +91,7 @@ enum UnixHTTP {
         return Response(status: status, body: Data(body))
     }
 
-    private static func dechunk(_ chunked: Data.SubSequence) -> Data.SubSequence {
+    static func dechunk(_ chunked: Data.SubSequence) -> Data.SubSequence {
         var out = Data()
         var rest = chunked
         while let lineEnd = rest.range(of: Data("\r\n".utf8)) {

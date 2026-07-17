@@ -23,6 +23,11 @@ let package = Package(
                 // Sparkle.framework is copied into Contents/Frameworks by bundle.sh.
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
             ]
+        ),
+        .testTarget(
+            name: "WhalebridgeTests",
+            dependencies: ["Whalebridge"],
+            path: "Tests/WhalebridgeTests"
         )
     ]
 )
