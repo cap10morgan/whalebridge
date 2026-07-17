@@ -37,8 +37,11 @@ cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$OUT/Contents/Resources/"
 [[ -f "$ROOT/build/icon/Assets.car" ]] || { echo "missing build/icon/Assets.car — run make icons" >&2; exit 1; }
 cp "$ROOT/build/icon/Assets.car" "$OUT/Contents/Resources/Assets.car"
 cp "$ROOT/build/icon/Whalebridge.icns" "$OUT/Contents/Resources/Whalebridge.icns"
-# SPM resource bundle (menu bar icon)
-cp -R "$ROOT/app/.build/release/Whalebridge_Whalebridge.bundle" "$OUT/Contents/Resources/" 2>/dev/null || true
+# SPM resource bundle (menu bar icon). MenuBarIcon looks for it here first
+# (see MenuBarIcon.swift) — SwiftPM's generated Bundle.module accessor
+# expects a flat layout next to the executable, which a real .app isn't.
+[[ -d "$ROOT/app/.build/release/Whalebridge_Whalebridge.bundle" ]] || { echo "missing app/.build/release/Whalebridge_Whalebridge.bundle — run swift build in app/" >&2; exit 1; }
+cp -R "$ROOT/app/.build/release/Whalebridge_Whalebridge.bundle" "$OUT/Contents/Resources/"
 
 cat > "$OUT/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

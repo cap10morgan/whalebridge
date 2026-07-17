@@ -11,8 +11,23 @@ enum MenuBarIcon {
     static let startingFrames: [NSImage] = (0..<12).map { load(String(format: "MenuBarIcon-%02d", $0)) }
     static let frameDuration: Duration = .milliseconds(80)
 
+    // SwiftPM's generated Bundle.module accessor looks next to
+    // Bundle.main.bundleURL, which is the .app root — wrong for a real .app,
+    // where resources live in Contents/Resources and codesign rejects
+    // anything else at the bundle root. Bundle.main.resourceURL resolves
+    // correctly there; it's nil for `swift run`'s flat layout, where
+    // Bundle.module (matching that layout) is the fallback.
+    private static let resourceBundle: Bundle = {
+        if let url = Bundle.main.resourceURL?.appendingPathComponent("Whalebridge_Whalebridge.bundle"),
+            let bundle = Bundle(url: url)
+        {
+            return bundle
+        }
+        return Bundle.module
+    }()
+
     private static func load(_ name: String) -> NSImage {
-        guard let url = Bundle.module.url(forResource: name, withExtension: "png"),
+        guard let url = resourceBundle.url(forResource: name, withExtension: "png"),
             let image = NSImage(contentsOf: url)
         else {
             let fallback = NSImage(systemSymbolName: "shippingbox", accessibilityDescription: "Whalebridge")!
