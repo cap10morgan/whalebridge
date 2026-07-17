@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Select latest Xcode 26
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          swift --version
+
+      - name: Install librsvg
+        run: brew install librsvg
+
+      # Optional until a Developer ID certificate exists: without the secrets
+      # the bundle is ad-hoc signed (Sparkle updates still verify via EdDSA,
+      # but Gatekeeper will warn on first install).
+      - name: Import Developer ID certificate
+        if: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)"
+          [[ -n "$IDENTITY" ]] || { echo "no Developer ID Application identity in cert" >&2; exit 1; }
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Build bundle
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}" \
+          APPCAST_URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast.xml" \
+          make bundle
+
+      - name: Zip
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ditto -c -k --keepParent build/Whalebridge.app "build/Whalebridge-$VERSION.zip"
+
+      - name: Notarize and staple
+        if: ${{ secrets.APPLE_API_KEY_P8 != '' }}
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          xcrun notarytool submit "build/Whalebridge-$VERSION.zip" \
+            --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" --wait
+          rm "$RUNNER_TEMP/AuthKey.p8"
+          xcrun stapler staple build/Whalebridge.app
+          # Re-zip so the shipped archive contains the stapled ticket.
+          ditto -c -k --keepParent build/Whalebridge.app "build/Whalebridge-$VERSION.zip"
+
+      # generate_appcast EdDSA-signs the final zip and writes build/appcast.xml
+      # with enclosure URLs pointing at this release's assets. The app's
+      # SUFeedURL is releases/latest/download/appcast.xml, which serves the
+      # appcast attached to the newest release.
+      - name: Generate Sparkle appcast
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          [[ -n "$SPARKLE_ED_PRIVATE_KEY" ]] || { echo "SPARKLE_ED_PRIVATE_KEY secret is not set" >&2; exit 1; }
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle_ed_key"
+          app/.build/artifacts/sparkle/Sparkle/bin/generate_appcast build/ \
+            --ed-key-file "$RUNNER_TEMP/sparkle_ed_key" \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/" \
+            --maximum-versions 1
+          rm "$RUNNER_TEMP/sparkle_ed_key"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" \
+            "build/Whalebridge-$VERSION.zip" build/appcast.xml \
+            --title "Whalebridge $VERSION" --generate-notes

@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Build the app package and run its tests.
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode 26
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          swift --version
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/.build
+            ~/Library/Caches/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ hashFiles('app/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Build
+        working-directory: app
+        run: swift build
+
+      - name: Test
+        working-directory: app
+        run: swift test
+
+  # Build the vendored socktainer daemon with our patches applied, so a push
+  # that breaks the patches (or a submodule bump that breaks the build) fails CI.
+  daemon:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Select latest Xcode 26
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          swift --version
+
+      - name: Cache daemon build
+        uses: actions/cache@v4
+        with:
+          path: vendor/socktainer/.build
+          key: daemon-${{ runner.os }}-${{ hashFiles('vendor/socktainer/Package.resolved', 'patches/*.patch') }}
+          restore-keys: daemon-${{ runner.os }}-
+
+      - name: Build daemon
+        run: make daemon

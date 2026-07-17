@@ -35,31 +35,43 @@ make run      # bundle + launch
 make dev      # run the app unbundled via swift run (uses the vendor daemon build)
 ```
 
+## CI
+
+`.github/workflows/ci.yml` runs on every push and pull request: it builds the
+app package and runs `swift test`, and separately builds the vendored
+socktainer daemon with the `patches/` series applied so patch rot fails CI.
+
 ## Releasing
+
+Releases are cut by CI (`.github/workflows/release.yml`): push a version tag
+and the workflow builds the bundle, zips it, generates a Sparkle appcast, and
+attaches both to a GitHub Release.
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
 
 Updates are delivered with [Sparkle](https://sparkle-project.org). The app reads
 `SUFeedURL` and `SUPublicEDKey` from its Info.plist, both baked in by
 `scripts/bundle.sh` (override with the `APPCAST_URL` and `SUPUBLIC_ED_KEY` env
-vars). The matching private key lives in the release manager's login keychain —
-without it you cannot ship an update that existing installs will accept, so
-export a backup:
+vars). The feed points at `releases/latest/download/appcast.xml`, which always
+serves the appcast attached to the newest GitHub Release.
 
-```sh
-app/.build/artifacts/sparkle/Sparkle/bin/generate_keys -x whalebridge-eddsa.key
-```
+Repository secrets the release workflow uses:
 
-To cut a release, build a signed bundle, zip it, and regenerate the appcast that
-`SUFeedURL` points at:
-
-```sh
-SIGN_IDENTITY="Developer ID Application: …" VERSION=0.2.0 make bundle
-ditto -c -k --keepParent build/Whalebridge.app build/Whalebridge-0.2.0.zip
-app/.build/artifacts/sparkle/Sparkle/bin/generate_appcast build/
-```
-
-A real Developer ID (not the default ad-hoc signature) is required for releases:
-notarization needs the hardened runtime, which `bundle.sh` only enables when a
-signing identity is set.
+- `SPARKLE_ED_PRIVATE_KEY` (required) — the EdDSA private key matching
+  `SUPublicEDKey`; without a validly signed appcast, installed apps reject
+  updates. Also keep an offline backup
+  (`app/.build/artifacts/sparkle/Sparkle/bin/generate_keys -x whalebridge-eddsa.key`) —
+  if the key is lost, existing installs can never accept another update.
+- `MACOS_CERTIFICATE_P12` / `MACOS_CERTIFICATE_PASSWORD` (optional) — a
+  base64-encoded Developer ID Application certificate export and its password.
+  Without them the bundle is ad-hoc signed: Sparkle updates still verify via
+  EdDSA, but Gatekeeper warns on first install.
+- `APPLE_API_KEY_P8` / `APPLE_API_KEY_ID` / `APPLE_API_ISSUER` (optional) — an
+  App Store Connect API key for `notarytool`; enables notarization + stapling.
+  Requires the certificate secrets, since notarization needs the hardened
+  runtime, which `bundle.sh` only enables when a signing identity is set.
 
 ## License
 

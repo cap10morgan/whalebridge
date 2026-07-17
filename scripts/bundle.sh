@@ -13,7 +13,7 @@ SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 # Sparkle: where the app looks for updates, and the public half of the EdDSA key
 # whose private half lives in the release manager's login keychain. An empty
 # APPCAST_URL builds an app with the update UI hidden.
-APPCAST_URL="${APPCAST_URL:-https://wesmorgan.me/whalebridge/appcast.xml}"
+APPCAST_URL="${APPCAST_URL:-https://github.com/cap10morgan/whalebridge/releases/latest/download/appcast.xml}"
 SUPUBLIC_ED_KEY="${SUPUBLIC_ED_KEY:-hMwzmzzRFbLpZ4YmzHAxM8v1Py1WV7vEhItZ4n8oQLI=}"
 # apple/container version the vendored socktainer pins — the app offers to
 # install exactly this version on first run.
