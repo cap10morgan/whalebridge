@@ -10,6 +10,11 @@ permissions:
 jobs:
   release:
     runs-on: macos-26
+    # The secrets context isn't allowed in step-level `if`, so surface
+    # presence checks as job env flags.
+    env:
+      HAVE_SIGNING_CERT: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+      HAVE_NOTARY_KEY: ${{ secrets.APPLE_API_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,7 +32,7 @@ jobs:
       # the bundle is ad-hoc signed (Sparkle updates still verify via EdDSA,
       # but Gatekeeper will warn on first install).
       - name: Import Developer ID certificate
-        if: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+        if: env.HAVE_SIGNING_CERT == 'true'
         env:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -61,7 +66,7 @@ jobs:
           ditto -c -k --keepParent build/Whalebridge.app "build/Whalebridge-$VERSION.zip"
 
       - name: Notarize and staple
-        if: ${{ secrets.APPLE_API_KEY_P8 != '' }}
+        if: env.HAVE_NOTARY_KEY == 'true'
         env:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
