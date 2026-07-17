@@ -113,10 +113,11 @@ jobs:
           sudo container system status
 
       - name: Configure the default kernel
-        # --enable-kernel-install on `system start` doesn't reliably take
-        # effect when driven non-interactively through tmate; `container
-        # create` fails with "default kernel not configured" without this.
-        run: sudo container system kernel set --recommended
+        # --enable-kernel-install on `system start` downloads the kernel but
+        # doesn't reliably register it as default when driven non-interactively
+        # through tmate; `container create` then fails with "default kernel
+        # not configured". --force since the file it downloads already exists.
+        run: sudo container system kernel set --recommended --force
 
       - name: Start socktainer
         run: |
