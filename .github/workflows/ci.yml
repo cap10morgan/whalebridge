@@ -34,7 +34,8 @@ jobs:
         run: swift test
 
   # Build the vendored socktainer daemon with our patches applied, so a push
-  # that breaks the patches (or a submodule bump that breaks the build) fails CI.
+  # that breaks the patches (or a submodule bump that breaks the build) fails
+  # CI — then run upstream's unit suite against the patched tree.
   daemon:
     runs-on: macos-26
     steps:
@@ -56,3 +57,111 @@ jobs:
 
       - name: Build daemon
         run: make daemon
+
+      - name: Run daemon tests
+        run: make -C vendor/socktainer test
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: socktainer
+          path: vendor/socktainer/.build/release/socktainer
+
+  # Run the patched daemon against a live apple/container install and drive it
+  # through the Docker API — the contract Whalebridge depends on. GitHub's
+  # Apple silicon runners can't nest virtualization, so this covers image and
+  # container-create operations, not booting containers.
+  integration:
+    runs-on: macos-26
+    needs: daemon
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: socktainer
+
+      - name: Install apple/container (the version socktainer pins)
+        run: |
+          chmod 755 socktainer
+          VERSION="$(sed -n 's/.*appleContainerVersion = "\([0-9.]*\)".*/\1/p' vendor/socktainer/Package.swift | head -1)"
+          curl -fsSL -o container.pkg \
+            "https://github.com/apple/container/releases/download/${VERSION}/container-installer-unsigned.pkg"
+          sudo installer -pkg container.pkg -target /
+
+      # `container system start` needs a real user session to talk to launchd,
+      # which a runner's non-interactive shell isn't — run it inside a detached
+      # tmate session (upstream socktainer CI uses the same trick).
+      - name: Start apple/container services
+        run: |
+          brew install tmate
+          tmate -S /tmp/tmate.sock new-session -d
+          tmate -S /tmp/tmate.sock wait tmate-ready
+          tmate -F -S /tmp/tmate.sock send-keys "q" C-m
+          tmate -S /tmp/tmate.sock send-keys \
+            "sudo container system start --enable-kernel-install | tee /tmp/container.log" C-m
+          for _ in $(seq 60); do
+            if sudo container system status >/dev/null 2>&1; then
+              echo "container system is up"
+              break
+            fi
+            sleep 2
+          done
+          tmate -S /tmp/tmate.sock kill-session || true
+          sudo container system status
+
+      - name: Start socktainer
+        run: |
+          nohup sudo -i env \
+            SOCKTAINER_PLATFORM_NAME=Whalebridge SOCKTAINER_PLATFORM_VERSION=0.0.0-ci \
+            "$PWD/socktainer" > service.log 2>&1 &
+          sudo ln -s /var/root/.socktainer/container.sock /var/run/docker.sock
+          for _ in $(seq 30); do
+            if [ "$(sudo curl -s --unix-socket /var/run/docker.sock http://localhost/_ping)" = "OK" ]; then
+              echo "socktainer is answering"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "socktainer never answered /_ping" >&2
+          cat service.log >&2
+          exit 1
+
+      - name: Check /version reflects the platform-name patch
+        run: |
+          sudo curl -s --unix-socket /var/run/docker.sock http://localhost/version | tee version.json
+          jq -e '.Platform.Name == "Whalebridge"' version.json
+          jq -e '.Components[0].Name == "Whalebridge" and .Components[0].Version == "0.0.0-ci"' version.json
+          jq -e '.Components[1].Name == "socktainer"' version.json
+
+      - name: Check image pull streams progress (pull-progress patch)
+        run: |
+          sudo curl -s --unix-socket /var/run/docker.sock -X POST \
+            'http://localhost/images/create?fromImage=quay.io/podman/hello&tag=latest' | tee pull.log
+          grep -q 'Downloading' pull.log
+          grep -q 'progressDetail' pull.log
+          sudo curl -s --unix-socket /var/run/docker.sock http://localhost/images/json \
+            | jq -e 'map(.RepoTags // []) | flatten | any(contains("podman/hello"))'
+
+      - name: Check the docker CLI end to end
+        run: |
+          brew install docker
+          sudo docker version
+          sudo docker version | grep -q Whalebridge
+          sudo docker image ls | grep 'podman/hello'
+
+      - name: Check /containers/json matches the fields the app decodes
+        run: |
+          sudo docker create --name wb-ci quay.io/podman/hello
+          sudo curl -s --unix-socket /var/run/docker.sock \
+            'http://localhost/containers/json?all=1' | tee containers.json
+          jq -e 'type == "array" and length > 0' containers.json
+          jq -e '.[0] | has("Id") and has("Names") and has("Image") and has("State") and has("Status")' containers.json
+          jq -e '.[0].Names[0] == "/wb-ci"' containers.json
+          sudo docker rm wb-ci
+
+      - name: Show daemon log
+        if: always()
+        run: sudo cat service.log || true

@@ -37,9 +37,18 @@ make dev      # run the app unbundled via swift run (uses the vendor daemon buil
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push and pull request: it builds the
-app package and runs `swift test`, and separately builds the vendored
-socktainer daemon with the `patches/` series applied so patch rot fails CI.
+`.github/workflows/ci.yml` runs on every push and pull request:
+
+- **test** — builds the app package and runs `swift test`.
+- **daemon** — builds the vendored socktainer daemon with the `patches/`
+  series applied (so patch rot fails CI), then runs upstream's unit suite
+  against the patched tree.
+- **integration** — installs the pinned apple/container release, starts its
+  services, and drives the patched daemon over the Docker API: `/_ping`,
+  `/version` (verifying the platform-name patch), image pull (verifying the
+  pull-progress patch), and the `/containers/json` field contract the app's
+  Containers menu decodes. GitHub's runners can't nest virtualization, so
+  booting containers stays a local-only check.
 
 ## Releasing
 
