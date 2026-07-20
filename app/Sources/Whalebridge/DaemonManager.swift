@@ -147,7 +147,7 @@ final class DaemonManager: ObservableObject {
     func start() async {
         guard state != .running, state != .starting else { return }
         guard let daemonURL, FileManager.default.isExecutableFile(atPath: daemonURL.path) else {
-            state = .failed("daemon binary not found")
+            state = .failed("Whalebridge binary not found")
             return
         }
         await refreshRuntimeStatus()
@@ -386,7 +386,7 @@ final class DaemonManager: ObservableObject {
 
     private func daemonDidExit(status: Int32) {
         process = nil
-        state = stopRequested ? .stopped : .failed("daemon exited (code \(status)) — see log")
+        state = stopRequested ? .stopped : .failed("Whalebridge exited (code \(status)) — see log")
     }
 
     private func refreshContextStatus() {

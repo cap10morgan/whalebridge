@@ -6,7 +6,7 @@ struct MenuView: View {
     @ObservedObject var containers: ContainerStore = .shared
 
     var body: some View {
-        Text("Daemon: \(daemon.state.label)")
+        Text("Whalebridge: \(daemon.state.label)")
         // A compatible runtime is table stakes, not status — only surface it
         // when something needs the user's attention.
         if !daemon.runtimeStatus.isCompatible {
@@ -64,9 +64,9 @@ struct MenuView: View {
         }
 
         if daemon.state == .running {
-            Button("Stop Daemon") { daemon.stop() }
+            Button("Stop Whalebridge") { daemon.stop() }
         } else if !daemon.runtimeStatus.needsInstall {
-            Button("Start Daemon") { Task { await daemon.start() } }
+            Button("Start Whalebridge") { Task { await daemon.start() } }
         }
         if !daemon.runtimeStatus.needsInstall && !daemon.apiserverRunning {
             Button("Start Apple Container Services") {
@@ -83,7 +83,7 @@ struct MenuView: View {
                 set: { daemon.setDefaultContext($0) }
             ))
         Button("Copy DOCKER_HOST Export") { daemon.copyDockerHost() }
-        Button("Open Daemon Log") { daemon.openLog() }
+        Button("Open Whalebridge Log") { daemon.openLog() }
 
         Divider()
 
