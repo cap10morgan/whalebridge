@@ -105,4 +105,4 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           gh release create "$GITHUB_REF_NAME" \
             "build/Whalebridge-$VERSION.zip" build/appcast.xml \
-            --title "Whalebridge $VERSION" --generate-notes
+            --title "$GITHUB_REF_NAME" --generate-notes
