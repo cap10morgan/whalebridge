@@ -28,6 +28,15 @@ jobs:
       - name: Install librsvg
         run: brew install librsvg
 
+      # Same cache the daemon job in ci.yml uses — a release build otherwise
+      # recompiles all of socktainer and its dependencies from scratch.
+      - name: Cache daemon build
+        uses: actions/cache@v6
+        with:
+          path: vendor/socktainer/.build
+          key: daemon-${{ runner.os }}-${{ hashFiles('vendor/socktainer/Package.resolved', 'patches/*.patch') }}
+          restore-keys: daemon-${{ runner.os }}-
+
       # Optional until a Developer ID certificate exists: without the secrets
       # the bundle is ad-hoc signed (Sparkle updates still verify via EdDSA,
       # but Gatekeeper will warn on first install).
