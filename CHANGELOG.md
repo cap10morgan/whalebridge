@@ -4,6 +4,8 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-21
+
 ### Added
 - "About Whalebridge" menu item: a dialog with the app icon, current version, GitHub and Check for Updates buttons, and acknowledgment links to socktainer and Apple's container runtime.
 
@@ -34,7 +36,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/cap10morgan/whalebridge/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/cap10morgan/whalebridge/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/cap10morgan/whalebridge/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/cap10morgan/whalebridge/releases/tag/v0.1.0
