@@ -150,6 +150,13 @@ final class DaemonManager: ObservableObject {
             state = .failed("Whalebridge binary not found")
             return
         }
+        // Recovering from an install: the pkg installer updates apple/container's
+        // files on disk but doesn't restart an already-running apiserver, so a
+        // service started under the old version can still be live here even
+        // though `container --version` now reports the new one. socktainer's
+        // own compatibility check pings that live process, not the CLI, so
+        // trusting apiserverRunning would start it against a stale server.
+        let recoveringFromInstall = state == .waitingForRuntime
         await refreshRuntimeStatus()
         guard case .compatible = runtimeStatus else {
             state = .waitingForRuntime
@@ -159,7 +166,9 @@ final class DaemonManager: ObservableObject {
         stopRequested = false
         await reapOrphanedDaemon()
 
-        if !apiserverRunning {
+        if recoveringFromInstall {
+            await restartApiserver()
+        } else if !apiserverRunning {
             await startApiserver()
         }
 
@@ -282,6 +291,14 @@ final class DaemonManager: ObservableObject {
         guard containerCLIInstalled else { return }
         _ = await Shell.run(containerCLI, ["system", "start"])
         await refreshApiserverStatus()
+    }
+
+    /// `container system stop` on an already-stopped service is a harmless
+    /// no-op, so this is safe to call whenever the running apiserver's
+    /// version is in doubt.
+    private func restartApiserver() async {
+        _ = await Shell.run(containerCLI, ["system", "stop"])
+        await startApiserver()
     }
 
     private func refreshRuntimeStatus() async {
