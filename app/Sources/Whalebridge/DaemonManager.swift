@@ -61,6 +61,7 @@ final class DaemonManager: ObservableObject {
 
     private let previousContextKey = "previousDockerContext"
     private let firstRunContextKey = "didFirstRunContextSetup"
+    private let verifiedApiserverVersionKey = "verifiedApiserverVersion"
     private var offeredInstallThisLaunch = false
     private(set) var isTerminating = false
 
@@ -150,15 +151,8 @@ final class DaemonManager: ObservableObject {
             state = .failed("Whalebridge binary not found")
             return
         }
-        // Recovering from an install: the pkg installer updates apple/container's
-        // files on disk but doesn't restart an already-running apiserver, so a
-        // service started under the old version can still be live here even
-        // though `container --version` now reports the new one. socktainer's
-        // own compatibility check pings that live process, not the CLI, so
-        // trusting apiserverRunning would start it against a stale server.
-        let recoveringFromInstall = state == .waitingForRuntime
         await refreshRuntimeStatus()
-        guard case .compatible = runtimeStatus else {
+        guard case .compatible(let version) = runtimeStatus else {
             state = .waitingForRuntime
             return
         }
@@ -166,8 +160,21 @@ final class DaemonManager: ObservableObject {
         stopRequested = false
         await reapOrphanedDaemon()
 
-        if recoveringFromInstall {
+        // The apple/container pkg installer updates files on disk but doesn't
+        // restart an already-running apiserver, so a service started under an
+        // old version can still be live here even though `container --version`
+        // now reports the new one — and that can be true on a totally fresh
+        // Whalebridge launch, long after whatever upgraded it (our own
+        // installer flow, Homebrew, a manual download). socktainer's own
+        // compatibility check pings that live process, not the CLI, so
+        // trusting apiserverRunning would start it against a stale server.
+        // Track the last version we've confirmed the apiserver was actually
+        // restarted for, persisted across launches, and restart whenever it
+        // doesn't match what's installed now.
+        if UserDefaults.standard.string(forKey: verifiedApiserverVersionKey) != version {
+            NSLog("apple/container version changed to \(version) — restarting apiserver before starting Whalebridge")
             await restartApiserver()
+            UserDefaults.standard.set(version, forKey: verifiedApiserverVersionKey)
         } else if !apiserverRunning {
             await startApiserver()
         }
@@ -289,7 +296,10 @@ final class DaemonManager: ObservableObject {
 
     func startApiserver() async {
         guard containerCLIInstalled else { return }
-        _ = await Shell.run(containerCLI, ["system", "start"])
+        let result = await Shell.run(containerCLI, ["system", "start"])
+        if result.status != 0 {
+            NSLog("container system start exited \(result.status): \(result.output)")
+        }
         await refreshApiserverStatus()
     }
 
@@ -297,7 +307,10 @@ final class DaemonManager: ObservableObject {
     /// no-op, so this is safe to call whenever the running apiserver's
     /// version is in doubt.
     private func restartApiserver() async {
-        _ = await Shell.run(containerCLI, ["system", "stop"])
+        let result = await Shell.run(containerCLI, ["system", "stop"])
+        if result.status != 0 {
+            NSLog("container system stop exited \(result.status): \(result.output)")
+        }
         await startApiserver()
     }
 
