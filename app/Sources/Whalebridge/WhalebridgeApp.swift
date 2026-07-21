@@ -17,6 +17,11 @@ struct WhalebridgeApp: App {
         Settings {
             SettingsView(settings: settings, updater: updater, daemon: daemon)
         }
+
+        Window("About Whalebridge", id: "about") {
+            AboutView(updater: updater)
+        }
+        .windowResizability(.contentSize)
     }
 }
 

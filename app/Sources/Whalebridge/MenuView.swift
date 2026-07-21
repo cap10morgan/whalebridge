@@ -4,6 +4,7 @@ struct MenuView: View {
     @ObservedObject var daemon: DaemonManager
     @ObservedObject var updater: Updater
     @ObservedObject var containers: ContainerStore = .shared
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Text("Whalebridge: \(daemon.state.label)")
@@ -87,6 +88,7 @@ struct MenuView: View {
 
         Divider()
 
+        Button("About Whalebridge") { openWindow(id: "about") }
         if updater.isConfigured {
             Button("Check for Updates…") { updater.checkForUpdates() }
                 .disabled(!updater.canCheckForUpdates)
