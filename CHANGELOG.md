@@ -1,0 +1,40 @@
+# Changelog
+
+All notable changes to Whalebridge are documented in this file.
+
+## [Unreleased]
+
+### Added
+- "About Whalebridge" menu item: a dialog with the app icon, current version, GitHub and Check for Updates buttons, and acknowledgment links to socktainer and Apple's container runtime.
+
+### Fixed
+- The apiserver-restart fix from 0.1.2 only engaged when Whalebridge itself observed a runtime upgrade within a single run. It now persists the last verified apple/container version across launches, so a runtime that was upgraded before Whalebridge last started (by our own installer flow in an earlier run, or manually) still gets its apiserver restarted instead of trusting a stale already-running process.
+
+## [0.1.2] - 2026-07-21
+
+### Fixed
+- Apple's container installer updates files on disk but doesn't restart an already-running apiserver, which can keep serving the pre-upgrade version until something restarts it. socktainer's own compatibility check pings that live process and would fail with a version-mismatch error even after Whalebridge detected the upgrade was installed. Whalebridge now restarts Apple's container services after a runtime install instead of just starting them if they weren't already running.
+
+## [0.1.1] - 2026-07-20
+
+### Changed
+- Updated the bundled socktainer daemon to v1.1.1. Upstream absorbed our pull-progress patch as a native feature, so it was dropped rather than reapplied; the platform-branding patch remains.
+- Renamed "Daemon" to "Whalebridge" throughout the menu bar UI (status line, start/stop buttons, log menu item, failure messages).
+
+## [0.1.0] - 2026-07-17
+
+Initial release.
+
+### Added
+- Bundles and supervises a patched [socktainer](https://github.com/socktainer/socktainer) daemon, exposing the Docker Engine API over Apple's native [container](https://github.com/apple/container) runtime.
+- Menu bar UI: daemon and Apple container runtime status, a Containers section listing running containers with a "Stopped" submenu, Docker context management, and a daemon log shortcut.
+- Sparkle auto-update with a "Check for Updates" menu item.
+- Launch at login, on by default, configurable from a new Settings window.
+- Animated menu bar icon while the daemon is starting.
+- CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
+- Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
+
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/cap10morgan/whalebridge/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/cap10morgan/whalebridge/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/cap10morgan/whalebridge/releases/tag/v0.1.0
