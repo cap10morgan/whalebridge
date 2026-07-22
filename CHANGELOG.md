@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- The 0.1.4 "container's runtime state is missing or corrupted" message was wrong for a container that simply hasn't been started yet (Apple Container only creates a container's filesystem at start, not at create) — this is exactly what buildx's docker-container driver does, seeding files into its builder container via `docker cp`-style archive calls before starting it. That case now correctly says to run `docker start`, not `docker rm -f`; a container that genuinely started and then lost its state still gets the crash/`docker rm -f` guidance.
+
 ## [0.1.4] - 2026-07-22
 
 ### Changed
