@@ -45,10 +45,12 @@ make dev      # run the app unbundled via swift run (uses the vendor daemon buil
   against the patched tree.
 - **integration** — installs the pinned apple/container release, starts its
   services, and drives the patched daemon over the Docker API: `/_ping`,
-  `/version` (verifying the platform-name patch), image pull (verifying the
-  pull-progress patch), and the `/containers/json` field contract the app's
-  Containers menu decodes. GitHub's runners can't nest virtualization, so
-  booting containers stays a local-only check.
+  `/version` (verifying the platform-name patch), image pull progress
+  streaming, and the `/containers/json` field contract the app's Containers
+  menu decodes. GitHub's runners can't nest virtualization, so booting
+  containers — and verifying the default-memory-limit patch, which only
+  shows up in a running container's resource limits — stays a local-only
+  check.
 
 ## Releasing
 

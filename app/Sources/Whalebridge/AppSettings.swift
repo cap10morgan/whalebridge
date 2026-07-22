@@ -14,7 +14,19 @@ final class AppSettings: ObservableObject {
     }
     @Published private(set) var launchAtLoginError: String?
 
+    /// Percent of host RAM containers get when they don't request a memory
+    /// limit of their own (passed to socktainer as SOCKTAINER_DEFAULT_MEMORY_PERCENT).
+    /// Apple Container's own default is a fixed 1 GiB, which real workloads
+    /// (e.g. Node/vite builds) can OOM well under.
+    @Published var defaultContainerMemoryPercent: Double = 75 {
+        didSet {
+            guard defaultContainerMemoryPercent != oldValue else { return }
+            UserDefaults.standard.set(defaultContainerMemoryPercent, forKey: defaultContainerMemoryPercentKey)
+        }
+    }
+
     private let firstRunLoginItemKey = "didFirstRunLoginItem"
+    private let defaultContainerMemoryPercentKey = "defaultContainerMemoryPercent"
 
     /// SMAppService only works on a real bundle, so `make dev` runs opt out.
     private var canManageLoginItem: Bool {
@@ -22,6 +34,10 @@ final class AppSettings: ObservableObject {
     }
 
     private init() {
+        if let stored = UserDefaults.standard.object(forKey: defaultContainerMemoryPercentKey) as? Double {
+            defaultContainerMemoryPercent = stored
+        }
+
         guard canManageLoginItem else { return }
         // A menu bar daemon that vanishes on reboot is useless, so we opt in by
         // default — but only once, so we never re-enable a user's deliberate off.
@@ -63,6 +79,15 @@ struct SettingsView: View {
     @ObservedObject var updater: Updater
     @ObservedObject var daemon: DaemonManager
 
+    private var memoryLimitCaption: String {
+        let totalGB = Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824
+        let limitGB = totalGB * settings.defaultContainerMemoryPercent / 100
+        return String(
+            format: "%.0f%% of this Mac's %.0f GB (%.0f GB) for containers that don't set their own limit."
+                + " Applies the next time Whalebridge starts.",
+            settings.defaultContainerMemoryPercent, totalGB, limitGB)
+    }
+
     var body: some View {
         Form {
             Section {
@@ -81,6 +106,17 @@ struct SettingsView: View {
                 Text("Plain `docker` commands run on Apple containers.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Slider(value: $settings.defaultContainerMemoryPercent, in: 10...90, step: 5) {
+                        Text("Default container memory limit")
+                    }
+                    Text(memoryLimitCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if updater.isConfigured {

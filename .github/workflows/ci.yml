@@ -143,7 +143,7 @@ jobs:
           jq -e '.Components[0].Name == "Whalebridge" and .Components[0].Version == "0.0.0-ci"' version.json
           jq -e '.Components[1].Name == "socktainer"' version.json
 
-      - name: Check image pull streams progress (pull-progress patch)
+      - name: Check image pull streams progress
         run: |
           sudo curl -s --unix-socket /var/run/docker.sock -X POST \
             'http://localhost/images/create?fromImage=quay.io/podman/hello&tag=latest' | tee pull.log
