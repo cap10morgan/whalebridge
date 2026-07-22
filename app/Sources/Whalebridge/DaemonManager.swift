@@ -189,8 +189,8 @@ final class DaemonManager: ObservableObject {
             "SOCKTAINER_PLATFORM_NAME": "Whalebridge",
             "SOCKTAINER_PLATFORM_VERSION": appVersion,
             // Default memory limit for containers that don't request their own
-            // (patches/0002-default-container-memory-limit.patch), configurable
-            // in Settings.
+            // (patches/0002-container-lifecycle-and-buildx-fixes.patch),
+            // configurable in Settings.
             "SOCKTAINER_DEFAULT_MEMORY_PERCENT": "\(AppSettings.shared.defaultContainerMemoryPercent)",
         ]) { _, new in new }
         if let log = makeLogHandle() {

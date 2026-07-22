@@ -15,11 +15,141 @@ index d4e4063..ad565a4 100644
          case .invalidPath(let path):
              return "Invalid path: \(path)"
          case .notADirectory(let path):
+diff --git a/Sources/socktainer/Clients/ClientContainerService.swift b/Sources/socktainer/Clients/ClientContainerService.swift
+index f15c80d..33822c1 100644
+--- a/Sources/socktainer/Clients/ClientContainerService.swift
++++ b/Sources/socktainer/Clients/ClientContainerService.swift
+@@ -277,6 +277,16 @@ struct ClientContainerService: ClientContainerProtocol {
+     }
+ 
+     private func startInternal(container: ContainerSnapshot) async throws {
++        // EXPERIMENTAL: an archive PUT/GET against a never-started container
++        // (buildx's docker-container driver seeds files this way before its
++        // first /start) may have already bootstrapped it on demand — see
++        // PendingContainerBootstrap. Reuse that process instead of
++        // bootstrapping a second time, which Apple Container rejects.
++        if let process = await PendingContainerBootstrap.shared.take(id: container.id) {
++            try await launch(process, containerId: container.id)
++            return
++        }
++
+         let stdin: FileHandle? = nil
+         let stdout: FileHandle? = nil
+         let stderr: FileHandle? = nil
+@@ -285,21 +295,7 @@ struct ClientContainerService: ClientContainerProtocol {
+ 
+         do {
+             let process = try await containerClient.bootstrap(id: container.id, stdio: stdio)
+-            // Clear any exit code recorded by a previous run of this container so
+-            // /wait blocks for the new init process rather than immediately
+-            // returning the stale code (e.g. after a restart).
+-            await ContainerExitCodeStore.shared.remove(id: container.id)
+-            try await process.start()
+-            // Wait for the init process in the background so we can capture its
+-            // real exit code without blocking the /start response.
+-            let containerId = container.id
+-            let exitLogger = Logger(label: "socktainer.exitcode")
+-            Task.detached {
+-                let code = await ContainerExitCodeStore.resolveExitCode(logger: exitLogger) {
+-                    try await process.wait()
+-                }
+-                await ContainerExitCodeStore.shared.set(id: containerId, code: code)
+-            }
++            try await launch(process, containerId: container.id)
+         } catch {
+             // NOTE: If bootstrap fails because container is already booted,
+             //       the attach handler may have already bootstrapped it
+@@ -313,6 +309,23 @@ struct ClientContainerService: ClientContainerProtocol {
+         }
+     }
+ 
++    private func launch(_ process: ClientProcess, containerId: String) async throws {
++        // Clear any exit code recorded by a previous run of this container so
++        // /wait blocks for the new init process rather than immediately
++        // returning the stale code (e.g. after a restart).
++        await ContainerExitCodeStore.shared.remove(id: containerId)
++        try await process.start()
++        // Wait for the init process in the background so we can capture its
++        // real exit code without blocking the /start response.
++        let exitLogger = Logger(label: "socktainer.exitcode")
++        Task.detached {
++            let code = await ContainerExitCodeStore.resolveExitCode(logger: exitLogger) {
++                try await process.wait()
++            }
++            await ContainerExitCodeStore.shared.set(id: containerId, code: code)
++        }
++    }
++
+     func stop(id: String, signal: String?, timeout: Int?) async throws {
+         let id = ContainerNameUtility.sanitize(id)
+         guard let container = try await getContainer(id: id) else {
 diff --git a/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift b/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift
-index 2ae9e15..a165534 100644
+index 2ae9e15..efb2dc7 100644
 --- a/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift
 +++ b/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift
-@@ -78,7 +78,7 @@ struct ContainerArchiveRoute: RouteCollection {
+@@ -1,4 +1,5 @@
+ import ContainerAPIClient
++import ContainerResource
+ import Foundation
+ import Vapor
+ 
+@@ -18,6 +19,44 @@ struct ContainerArchivePutQuery: Content {
+     let copyUIDGID: Bool?
+ }
+ 
++/// buildx's docker-container driver seeds files into a container via archive
++/// PUT before ever starting it. Apple Container only materializes a
++/// container's rootfs at bootstrap, so a rootfsNotFound on a container
++/// that's never been started gets one on-demand bootstrap (VM boot only —
++/// the init process isn't launched yet) and a single retry. The real
++/// /start request later reuses this bootstrapped process instead of
++/// bootstrapping a second time — see PendingContainerBootstrap. Verified
++/// against a real buildx build end to end (bootstrap here + the Privileged
++/// capability fix together let a real BuildKit build complete and run).
++///
++/// Bootstrapping makes the container's VM live, holding rootfs.ext4 open as
++/// its block device — putArchive takes a completely different path for a
++/// running container (writes through the VM, not the raw file) specifically
++/// because a raw write after this point would be invisible to the guest. The
++/// retry must see that via a freshly-fetched snapshot, not the pre-bootstrap
++/// one the caller already had, which still reports .stopped.
++///
++/// If the on-demand bootstrap itself fails, that's swallowed in favor of
++/// re-throwing the original rootfsNotFound — the caller's existing "hasn't
++/// started yet, run docker start" guidance is still correct and actionable,
++/// which a raw bootstrap error (e.g. an XPC failure) would not be.
++private func withRootfsMaterialized<T>(
++    container: ContainerSnapshot,
++    containerClient: ClientContainerProtocol,
++    _ operation: (ContainerSnapshot) async throws -> T
++) async throws -> T {
++    do {
++        return try await operation(container)
++    } catch let error as ClientArchiveError {
++        guard case .rootfsNotFound = error, container.startedDate == nil else { throw error }
++        guard let process = try? await ContainerClient().bootstrap(id: container.id, stdio: [nil, nil, nil]),
++            let refreshed = try? await containerClient.getContainer(id: container.id)
++        else { throw error }
++        await PendingContainerBootstrap.shared.store(id: container.id, process: process)
++        return try await operation(refreshed)
++    }
++}
++
+ struct ContainerArchiveRoute: RouteCollection {
+     let containerClient: ClientContainerProtocol
+     let archiveClient: ClientArchiveProtocol
+@@ -58,7 +97,9 @@ struct ContainerArchiveRoute: RouteCollection {
+             }
+ 
+             do {
+-                let (tarData, stat) = try await archiveClient.getArchive(containerId: container.id, path: query.path)
++                let (tarData, stat) = try await withRootfsMaterialized(container: container, containerClient: containerClient) { container in
++                    try await archiveClient.getArchive(containerId: container.id, path: query.path)
++                }
+ 
+                 // Create the path stat header (base64 encoded JSON)
+                 let statJson = try JSONEncoder().encode(stat)
+@@ -78,7 +119,7 @@ struct ContainerArchiveRoute: RouteCollection {
                  case .pathNotFound:
                      throw Abort(.notFound, reason: error.localizedDescription)
                  case .rootfsNotFound:
@@ -28,7 +158,28 @@ index 2ae9e15..a165534 100644
                  default:
                      throw Abort(.internalServerError, reason: error.localizedDescription)
                  }
-@@ -158,7 +158,7 @@ struct ContainerArchiveRoute: RouteCollection {
+@@ -145,12 +186,14 @@ struct ContainerArchiveRoute: RouteCollection {
+             }
+ 
+             do {
+-                try await archiveClient.putArchive(
+-                    container: container,
+-                    path: query.path,
+-                    tarPath: tarPath,
+-                    noOverwriteDirNonDir: query.noOverwriteDirNonDir ?? false
+-                )
++                try await withRootfsMaterialized(container: container, containerClient: containerClient) { container in
++                    try await archiveClient.putArchive(
++                        container: container,
++                        path: query.path,
++                        tarPath: tarPath,
++                        noOverwriteDirNonDir: query.noOverwriteDirNonDir ?? false
++                    )
++                }
+ 
+                 return Response(status: .ok)
+             } catch let error as ClientArchiveError {
+@@ -158,7 +201,7 @@ struct ContainerArchiveRoute: RouteCollection {
                  case .pathNotFound:
                      throw Abort(.notFound, reason: error.localizedDescription)
                  case .rootfsNotFound:
@@ -37,7 +188,18 @@ index 2ae9e15..a165534 100644
                  case .invalidPath:
                      throw Abort(.badRequest, reason: error.localizedDescription)
                  default:
-@@ -201,7 +201,7 @@ struct ContainerArchiveRoute: RouteCollection {
+@@ -186,7 +229,9 @@ struct ContainerArchiveRoute: RouteCollection {
+             }
+ 
+             do {
+-                let (_, stat) = try await archiveClient.getArchive(containerId: container.id, path: query.path)
++                let (_, stat) = try await withRootfsMaterialized(container: container, containerClient: containerClient) { container in
++                    try await archiveClient.getArchive(containerId: container.id, path: query.path)
++                }
+ 
+                 // Create the path stat header (base64 encoded JSON)
+                 let statJson = try JSONEncoder().encode(stat)
+@@ -201,7 +246,7 @@ struct ContainerArchiveRoute: RouteCollection {
                  case .pathNotFound:
                      throw Abort(.notFound, reason: error.localizedDescription)
                  case .rootfsNotFound:
@@ -47,10 +209,42 @@ index 2ae9e15..a165534 100644
                      throw Abort(.internalServerError, reason: error.localizedDescription)
                  }
 diff --git a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
-index 1f78ac7..558ff3e 100644
+index 1f78ac7..2581402 100644
 --- a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
 +++ b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
-@@ -902,9 +902,27 @@ func convertPortBindings(from portBindings: [String: [PortBinding]]) throws -> [
+@@ -98,8 +98,11 @@ extension ContainerCreateRoute {
+ 
+             let normalizedCapabilities: (capAdd: [String], capDrop: [String])
+             do {
++                let requestedCapAdd = ContainerCreateRoute.resolveCapAdd(
++                    requested: body.HostConfig?.CapAdd ?? [],
++                    privileged: body.HostConfig?.Privileged == true)
+                 normalizedCapabilities = try Parser.capabilities(
+-                    capAdd: body.HostConfig?.CapAdd ?? [],
++                    capAdd: requestedCapAdd,
+                     capDrop: body.HostConfig?.CapDrop ?? [])
+             } catch {
+                 throw Abort(.badRequest, reason: "invalid capability: \(error)")
+@@ -813,6 +816,18 @@ extension ContainerCreateRoute {
+         max(1, nanoCpus / 1_000_000_000)
+     }
+ 
++    /// Apple Container has no true privileged mode, but socktainer was
++    /// silently dropping HostConfig.Privileged entirely rather than
++    /// approximating it — breaking callers that rely on --privileged (e.g.
++    /// buildx's docker-container driver, whose BuildKit builder needs it to
++    /// mount build contexts and fails with "operation not permitted"
++    /// without it). Grant the closest available equivalent: all
++    /// capabilities, merged with whatever was explicitly requested.
++    static func resolveCapAdd(requested: [String], privileged: Bool) -> [String] {
++        guard privileged, !requested.contains(where: { $0.uppercased() == "ALL" }) else { return requested }
++        return requested + ["ALL"]
++    }
++
+     /// Encodes a restart policy for label persistence, matching Docker semantics of not
+     /// persisting the default ("no"/empty) policy. Returns nil (and logs) on encode failure.
+     static func restartPolicyLabel(for policy: RestartPolicy?, logger: Logger) -> String? {
+@@ -902,9 +917,27 @@ func convertPortBindings(from portBindings: [String: [PortBinding]]) throws -> [
  }
  
  // Maps Docker HostConfig.Memory (bytes, 0 = no limit) to Apple Container memoryInBytes.
@@ -168,6 +362,39 @@ index 0000000..5cd3916
 +        return
 +            "container's runtime state is missing or corrupted (it may have crashed abnormally)"
 +            + " — remove it with `docker rm -f \(reference)` and try again"
++    }
++}
+diff --git a/Sources/socktainer/Utilities/PendingContainerBootstrap.swift b/Sources/socktainer/Utilities/PendingContainerBootstrap.swift
+new file mode 100644
+index 0000000..308e227
+--- /dev/null
++++ b/Sources/socktainer/Utilities/PendingContainerBootstrap.swift
+@@ -0,0 +1,27 @@
++import ContainerAPIClient
++
++/// EXPERIMENTAL: holds a container that's been bootstrapped (VM booted, rootfs
++/// materialized) on demand by an archive PUT/GET against a container that
++/// hasn't been started yet — buildx's docker-container driver seeds files
++/// into its builder container this way before ever calling /start.
++///
++/// `bootstrap()` boots the VM without running the container's init process;
++/// `process.start()` is the separate step that actually launches it. Storing
++/// the bootstrapped-but-not-started process here lets the real `/start`
++/// request (whenever the client gets around to it) reuse this exact process
++/// instead of bootstrapping a second time — Apple Container errors if you
++/// bootstrap an already-booted container, and calling .start() is what
++/// actually needs to happen at the right moment.
++actor PendingContainerBootstrap {
++    static let shared = PendingContainerBootstrap()
++
++    private var pending: [String: ClientProcess] = [:]
++
++    func store(id: String, process: ClientProcess) {
++        pending[id] = process
++    }
++
++    func take(id: String) -> ClientProcess? {
++        pending.removeValue(forKey: id)
 +    }
 +}
 diff --git a/Tests/socktainerTests/ContainerSnapshotFixture.swift b/Tests/socktainerTests/ContainerSnapshotFixture.swift
@@ -368,6 +595,66 @@ index 0000000..1a53a32
 +    }
 +    func prune(filters: [String: [String]]) async throws -> (deletedContainers: [String], spaceReclaimed: Int64) { ([], 0) }
 +}
+diff --git a/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift b/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
+index 3cb63eb..26a5e31 100644
+--- a/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
++++ b/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
+@@ -382,6 +382,22 @@ struct CapabilityValidationTests {
+             }
+         }
+     }
++
++    @Test("Privileged (with no explicit CapAdd) passes validation, matching --privileged")
++    func privilegedAlonePassesValidation() async throws {
++        // Doesn't observe the actual capAdd content — resolveCapAdd's own unit
++        // tests cover that — just confirms Privileged never trips the "unknown
++        // capability" 400 path this suite is otherwise testing against.
++        try await withCreateRouteApp(maxBodySize: "64mb") { app in
++            try await app.testing().test(
++                .POST, "/v1.51/containers/create?name=privileged",
++                headers: ["Content-Type": "application/json"],
++                body: ByteBuffer(string: #"{"Image":"socktainer-nonexistent-test-image:missing","HostConfig":{"Privileged":true}}"#)
++            ) { res async in
++                #expect(res.status == .notFound)
++            }
++        }
++    }
+ }
+ 
+ @Suite("ContainerCreateRoute.vCpus")
+@@ -406,6 +422,32 @@ struct VCpusConversionTests {
+     }
+ }
+ 
++@Suite("ContainerCreateRoute.resolveCapAdd")
++struct ResolveCapAddTests {
++
++    @Test("Privileged with no explicit CapAdd grants ALL")
++    func privilegedGrantsAll() {
++        #expect(ContainerCreateRoute.resolveCapAdd(requested: [], privileged: true) == ["ALL"])
++    }
++
++    @Test("Privileged merges ALL alongside explicitly requested capabilities")
++    func privilegedMergesWithExplicitCaps() {
++        #expect(ContainerCreateRoute.resolveCapAdd(requested: ["NET_ADMIN"], privileged: true) == ["NET_ADMIN", "ALL"])
++    }
++
++    @Test("Privileged doesn't duplicate ALL if already requested (any case)")
++    func privilegedDoesNotDuplicateAll() {
++        #expect(ContainerCreateRoute.resolveCapAdd(requested: ["ALL"], privileged: true) == ["ALL"])
++        #expect(ContainerCreateRoute.resolveCapAdd(requested: ["all"], privileged: true) == ["all"])
++    }
++
++    @Test("Not privileged leaves the requested list untouched")
++    func notPrivilegedUnchanged() {
++        #expect(ContainerCreateRoute.resolveCapAdd(requested: [], privileged: false) == [])
++        #expect(ContainerCreateRoute.resolveCapAdd(requested: ["NET_ADMIN"], privileged: false) == ["NET_ADMIN"])
++    }
++}
++
+ @Suite("ContainerCreateRoute.validateCpuLimits")
+ struct CpuLimitsValidationTests {
+ 
 diff --git a/Tests/socktainerTests/Routes/ContainerExportRouteTests.swift b/Tests/socktainerTests/Routes/ContainerExportRouteTests.swift
 index 1313c7e..4e6f271 100644
 --- a/Tests/socktainerTests/Routes/ContainerExportRouteTests.swift
@@ -526,5 +813,60 @@ index 0000000..5635c7e
 +            nativeId: "abcdef0123456789", ip: "192.168.65.2", network: "bridge", labels: [:], status: .stopped, startedDate: Date())
 +        let message = MissingContainerRuntimeState.message(for: snapshot, reference: "buildx_buildkit_whalebridge")
 +        #expect(message.contains("docker rm -f buildx_buildkit_whalebridge"))
++    }
++}
+diff --git a/Tests/socktainerTests/Utilities/PendingContainerBootstrapTests.swift b/Tests/socktainerTests/Utilities/PendingContainerBootstrapTests.swift
+new file mode 100644
+index 0000000..0c19f01
+--- /dev/null
++++ b/Tests/socktainerTests/Utilities/PendingContainerBootstrapTests.swift
+@@ -0,0 +1,49 @@
++import ContainerAPIClient
++import ContainerizationOS
++import Testing
++
++@testable import socktainer
++
++private struct FakeClientProcess: ClientProcess {
++    let id: String
++    func start() async throws {}
++    func resize(_ size: Terminal.Size) async throws {}
++    func kill(_ signal: Int32) async throws {}
++    func wait() async throws -> Int32 { 0 }
++}
++
++@Suite("PendingContainerBootstrap")
++struct PendingContainerBootstrapTests {
++
++    @Test("take returns nil when nothing was ever stored for that id")
++    func takeNothingStoredReturnsNil() async {
++        let registry = PendingContainerBootstrap()
++        #expect(await registry.take(id: "never-stored") == nil)
++    }
++
++    @Test("take returns what was stored for that id")
++    func takeReturnsStoredProcess() async {
++        let registry = PendingContainerBootstrap()
++        let process = FakeClientProcess(id: "web")
++        await registry.store(id: "web", process: process)
++        let taken = await registry.take(id: "web")
++        #expect(taken?.id == "web")
++    }
++
++    @Test("take consumes the entry — a second take for the same id returns nil")
++    func takeIsOneShot() async {
++        let registry = PendingContainerBootstrap()
++        await registry.store(id: "web", process: FakeClientProcess(id: "web"))
++        _ = await registry.take(id: "web")
++        #expect(await registry.take(id: "web") == nil)
++    }
++
++    @Test("entries for different container ids don't collide")
++    func perContainerIsolation() async {
++        let registry = PendingContainerBootstrap()
++        await registry.store(id: "web", process: FakeClientProcess(id: "web"))
++        await registry.store(id: "db", process: FakeClientProcess(id: "db"))
++        #expect(await registry.take(id: "web")?.id == "web")
++        #expect(await registry.take(id: "db")?.id == "db")
 +    }
 +}
