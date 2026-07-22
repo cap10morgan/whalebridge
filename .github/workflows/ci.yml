@@ -93,14 +93,13 @@ jobs:
 
       # `container system start` needs a real user session to talk to launchd,
       # which a runner's non-interactive shell isn't — run it inside a detached
-      # tmate session (upstream socktainer CI uses the same trick).
+      # tmux session (upstream socktainer CI uses tmate, a fork of tmux, for
+      # the same trick; tmate is deprecated upstream, tmux isn't).
       - name: Start apple/container services
         run: |
-          brew install tmate
-          tmate -S /tmp/tmate.sock new-session -d
-          tmate -S /tmp/tmate.sock wait tmate-ready
-          tmate -F -S /tmp/tmate.sock send-keys "q" C-m
-          tmate -S /tmp/tmate.sock send-keys \
+          brew install tmux
+          tmux -S /tmp/container.sock new-session -d
+          tmux -S /tmp/container.sock send-keys \
             "sudo container system start --enable-kernel-install | tee /tmp/container.log" C-m
           for _ in $(seq 60); do
             if sudo container system status >/dev/null 2>&1; then
@@ -109,13 +108,13 @@ jobs:
             fi
             sleep 2
           done
-          tmate -S /tmp/tmate.sock kill-session || true
+          tmux -S /tmp/container.sock kill-session || true
           sudo container system status
 
       - name: Configure the default kernel
         # --enable-kernel-install on `system start` downloads the kernel but
         # doesn't reliably register it as default when driven non-interactively
-        # through tmate; `container create` then fails with "default kernel
+        # through tmux; `container create` then fails with "default kernel
         # not configured". --force since the file it downloads already exists.
         run: sudo container system kernel set --recommended --force
 
