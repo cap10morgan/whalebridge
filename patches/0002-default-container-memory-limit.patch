@@ -1,0 +1,128 @@
+diff --git a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
+index 1f78ac7..558ff3e 100644
+--- a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
++++ b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
+@@ -902,9 +902,27 @@ func convertPortBindings(from portBindings: [String: [PortBinding]]) throws -> [
+ }
+ 
+ // Maps Docker HostConfig.Memory (bytes, 0 = no limit) to Apple Container memoryInBytes.
+-// Returns nil when the value is absent, zero, or negative so the Apple Container
+-// default (1 GiB) is preserved.
+-func resolveMemoryInBytes(_ memory: Int?) -> UInt64? {
+-    guard let memory, memory > 0 else { return nil }
+-    return UInt64(memory)
++// When the value is absent, zero, or negative, Apple Container's own default
++// (1 GiB) is too little for real workloads — e.g. a Node/vite build can OOM
++// well under that — so we default instead to a percentage of host RAM,
++// leaving room for the host OS and other containers.
++func resolveMemoryInBytes(
++    _ memory: Int?,
++    environment: [String: String] = ProcessInfo.processInfo.environment
++) -> UInt64? {
++    if let memory, memory > 0 {
++        return UInt64(memory)
++    }
++    let hostMemory = ProcessInfo.processInfo.physicalMemory
++    guard hostMemory > 0 else { return nil }
++    return UInt64((Double(hostMemory) * defaultMemoryPercent(environment: environment) / 100).rounded(.down))
++}
++
++// Whalebridge (or any embedder) can override the default via this variable;
++// an absent, non-numeric, or out-of-range value falls back to 75%.
++func defaultMemoryPercent(environment: [String: String]) -> Double {
++    guard let raw = environment["SOCKTAINER_DEFAULT_MEMORY_PERCENT"],
++        let value = Double(raw), value > 0, value <= 100
++    else { return 75 }
++    return value
+ }
+diff --git a/Tests/socktainerTests/Routes/ContainerMemoryTests.swift b/Tests/socktainerTests/Routes/ContainerMemoryTests.swift
+index 3819049..a8e565f 100644
+--- a/Tests/socktainerTests/Routes/ContainerMemoryTests.swift
++++ b/Tests/socktainerTests/Routes/ContainerMemoryTests.swift
+@@ -1,4 +1,5 @@
+ import ContainerResource
++import Foundation
+ import Testing
+ 
+ @testable import socktainer
+@@ -8,22 +9,31 @@ struct ContainerMemoryTests {
+ 
+     // MARK: - resolveMemoryInBytes
+ 
+-    @Test("nil memory returns nil (preserve Apple Container default)")
+-    func nilMemoryReturnsNil() {
+-        #expect(resolveMemoryInBytes(nil) == nil)
++    // Docker's 'no limit' sentinel (Memory=0, or the field absent) has no
++    // equivalent in Apple Container: VMs require a fixed RAM amount. Apple
++    // Container's own 1 GiB default is too little for real workloads, so we
++    // default to a percentage of host RAM instead — computed the same way
++    // the production code does, since the actual value is host-dependent.
++    // Pass an explicit (possibly empty) environment so these tests don't
++    // depend on — or race against — the real process environment.
++    private func defaultBytes(percent: Double = 75) -> UInt64 {
++        UInt64((Double(ProcessInfo.processInfo.physicalMemory) * percent / 100).rounded(.down))
+     }
+ 
+-    @Test("zero memory returns nil — Apple Container 1 GiB default is preserved")
+-    func zeroMemoryReturnsNil() {
+-        // Docker's 'no limit' sentinel (Memory=0) has no equivalent in Apple Container:
+-        // VMs require a fixed RAM amount. Returning nil preserves the 1 GiB default.
+-        #expect(resolveMemoryInBytes(0) == nil)
++    @Test("nil memory defaults to 75% of host RAM")
++    func nilMemoryDefaults() {
++        #expect(resolveMemoryInBytes(nil, environment: [:]) == defaultBytes())
+     }
+ 
+-    @Test("negative memory returns nil (invalid, treated as no limit)")
+-    func negativeMemoryReturnsNil() {
+-        #expect(resolveMemoryInBytes(-1) == nil)
+-        #expect(resolveMemoryInBytes(Int.min) == nil)
++    @Test("zero memory defaults to 75% of host RAM")
++    func zeroMemoryDefaults() {
++        #expect(resolveMemoryInBytes(0, environment: [:]) == defaultBytes())
++    }
++
++    @Test("negative memory defaults to 75% of host RAM (invalid, treated as unset)")
++    func negativeMemoryDefaults() {
++        #expect(resolveMemoryInBytes(-1, environment: [:]) == defaultBytes())
++        #expect(resolveMemoryInBytes(Int.min, environment: [:]) == defaultBytes())
+     }
+ 
+     @Test("positive memory maps to UInt64 bytes")
+@@ -37,6 +47,36 @@ struct ContainerMemoryTests {
+         #expect(resolveMemoryInBytes(1) == 1)
+     }
+ 
++    @Test("SOCKTAINER_DEFAULT_MEMORY_PERCENT overrides the default")
++    func envOverridesDefault() {
++        let env = ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "50"]
++        #expect(resolveMemoryInBytes(nil, environment: env) == defaultBytes(percent: 50))
++    }
++
++    // MARK: - defaultMemoryPercent
++
++    @Test("missing env falls back to 75")
++    func percentMissingFallsBack() {
++        #expect(defaultMemoryPercent(environment: [:]) == 75)
++    }
++
++    @Test("valid env value is used")
++    func percentValidValue() {
++        #expect(defaultMemoryPercent(environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "40"]) == 40)
++    }
++
++    @Test("non-numeric, zero, negative, and out-of-range values fall back to 75")
++    func percentInvalidValuesFallBack() {
++        for raw in ["not-a-number", "0", "-10", "100.5", "101", ""] {
++            #expect(defaultMemoryPercent(environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": raw]) == 75)
++        }
++    }
++
++    @Test("100 is the maximum accepted value")
++    func percentMaxAccepted() {
++        #expect(defaultMemoryPercent(environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "100"]) == 100)
++    }
++
+     // MARK: - ContainerConfiguration.Resources default
+ 
+     @Test("Apple Container default VM memory is 1 GiB")
