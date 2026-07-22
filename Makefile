@@ -9,6 +9,7 @@ DAEMON_BIN := $(ROOT)/vendor/socktainer/.build/release/socktainer
 daemon:
 	git submodule update --init
 	git -C vendor/socktainer checkout -- .
+	git -C vendor/socktainer clean -fd
 	for p in $(ROOT)/patches/*.patch; do git -C vendor/socktainer apply "$$p"; done
 	$(MAKE) -C vendor/socktainer release
 

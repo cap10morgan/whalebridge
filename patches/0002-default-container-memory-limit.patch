@@ -1,3 +1,52 @@
+diff --git a/Sources/socktainer/Clients/ClientArchiveService.swift b/Sources/socktainer/Clients/ClientArchiveService.swift
+index d4e4063..04dba1b 100644
+--- a/Sources/socktainer/Clients/ClientArchiveService.swift
++++ b/Sources/socktainer/Clients/ClientArchiveService.swift
+@@ -60,7 +60,12 @@ enum ClientArchiveError: Error, LocalizedError {
+         case .pathNotFound(let path):
+             return "Path not found in container: \(path)"
+         case .rootfsNotFound(let id):
+-            return "Rootfs not found for container: \(id)"
++            // The container itself exists (callers check that first) — a missing
++            // rootfs means its on-disk runtime state is gone, most often from an
++            // abnormal exit (e.g. an OOM kill) that never finished writing it.
++            return
++                "container's runtime state is missing or corrupted (it may have crashed abnormally)"
++                + " — remove it with `docker rm -f \(id)` and try again"
+         case .invalidPath(let path):
+             return "Invalid path: \(path)"
+         case .notADirectory(let path):
+diff --git a/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift b/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift
+index 2ae9e15..05e0429 100644
+--- a/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift
++++ b/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift
+@@ -78,7 +78,7 @@ struct ContainerArchiveRoute: RouteCollection {
+                 case .pathNotFound:
+                     throw Abort(.notFound, reason: error.localizedDescription)
+                 case .rootfsNotFound:
+-                    throw Abort(.notFound, reason: error.localizedDescription)
++                    throw Abort(.conflict, reason: error.localizedDescription)
+                 default:
+                     throw Abort(.internalServerError, reason: error.localizedDescription)
+                 }
+@@ -158,7 +158,7 @@ struct ContainerArchiveRoute: RouteCollection {
+                 case .pathNotFound:
+                     throw Abort(.notFound, reason: error.localizedDescription)
+                 case .rootfsNotFound:
+-                    throw Abort(.notFound, reason: error.localizedDescription)
++                    throw Abort(.conflict, reason: error.localizedDescription)
+                 case .invalidPath:
+                     throw Abort(.badRequest, reason: error.localizedDescription)
+                 default:
+@@ -201,7 +201,7 @@ struct ContainerArchiveRoute: RouteCollection {
+                 case .pathNotFound:
+                     throw Abort(.notFound, reason: error.localizedDescription)
+                 case .rootfsNotFound:
+-                    throw Abort(.notFound, reason: error.localizedDescription)
++                    throw Abort(.conflict, reason: error.localizedDescription)
+                 default:
+                     throw Abort(.internalServerError, reason: error.localizedDescription)
+                 }
 diff --git a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
 index 1f78ac7..558ff3e 100644
 --- a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
@@ -35,6 +84,224 @@ index 1f78ac7..558ff3e 100644
 +    else { return 75 }
 +    return value
  }
+diff --git a/Sources/socktainer/Routes/Containers/ContainerExportRoute.swift b/Sources/socktainer/Routes/Containers/ContainerExportRoute.swift
+index 7e219be..4e60ded 100644
+--- a/Sources/socktainer/Routes/Containers/ContainerExportRoute.swift
++++ b/Sources/socktainer/Routes/Containers/ContainerExportRoute.swift
+@@ -40,7 +40,7 @@ struct ContainerExportRoute: RouteCollection {
+             } catch let error as ClientArchiveError {
+                 switch error {
+                 case .rootfsNotFound:
+-                    throw Abort(.notFound, reason: error.localizedDescription)
++                    throw Abort(.conflict, reason: error.localizedDescription)
+                 default:
+                     throw Abort(.internalServerError, reason: "Error exporting container \(reference): \(error.localizedDescription)")
+                 }
+diff --git a/Sources/socktainer/Routes/Containers/ContainerInspectRoute.swift b/Sources/socktainer/Routes/Containers/ContainerInspectRoute.swift
+index fb69bac..35a5e16 100644
+--- a/Sources/socktainer/Routes/Containers/ContainerInspectRoute.swift
++++ b/Sources/socktainer/Routes/Containers/ContainerInspectRoute.swift
+@@ -172,6 +172,11 @@ extension ContainerInspectRoute {
+                 Running: container.status == .running,
+                 Paused: false,  // Apple containers don't have a paused state like Docker
+                 Restarting: isPendingRestart,
++                // Always false: Linux's cgroup OOM counters (memory.events.oom_kill)
++                // are in scope inside Apple's Containerization framework, but not
++                // surfaced through apple/container's client-facing XPC API — the
++                // ContainerStats socktainer can actually query has no OOM field —
++                // so there is no real signal to report here on this platform.
+                 OOMKilled: false,
+                 Dead: container.status == .stopped && !isPendingRestart,
+                 Pid: 0,  // we have no mechanism to derive PID in Apple container
+diff --git a/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift b/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift
+index bf4a6f1..4520d11 100644
+--- a/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift
++++ b/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift
+@@ -29,7 +29,22 @@ extension ContainerLogsRoute {
+ 
+             // always use the container's log, not the boot of the container
+             let boot = false
+-            let fhs = try await ContainerClient().logs(id: container.id)
++            let fhs: [FileHandle]
++            do {
++                fhs = try await ContainerClient().logs(id: container.id)
++            } catch {
++                // socktainer already confirmed the container exists (above), so a
++                // failure to open its log files means its on-disk runtime state is
++                // missing or corrupted — most often an abnormal exit (e.g. an OOM
++                // kill) that left the bundle incomplete. The underlying error is a
++                // raw Cocoa/POSIX message ("stdio.log doesn't exist") that gives no
++                // hint of that, so translate it into something actionable.
++                throw Abort(
++                    .conflict,
++                    reason:
++                        "container's runtime state is missing or corrupted (it may have crashed abnormally)"
++                        + " — remove it with `docker rm -f` and try again")
++            }
+             let fileHandle = boot ? fhs[1] : fhs[0]
+             // Create a streaming body
+             // `follow=1` means tail like
+diff --git a/Tests/socktainerTests/Routes/ContainerArchiveRouteTests.swift b/Tests/socktainerTests/Routes/ContainerArchiveRouteTests.swift
+new file mode 100644
+index 0000000..c473fa7
+--- /dev/null
++++ b/Tests/socktainerTests/Routes/ContainerArchiveRouteTests.swift
+@@ -0,0 +1,134 @@
++import ContainerAPIClient
++import ContainerResource
++import Foundation
++import Testing
++import Vapor
++import VaporTesting
++
++@testable import socktainer
++
++/// A missing rootfs means the container's on-disk runtime state is gone —
++/// most often from an abnormal exit (e.g. an OOM kill) that never finished
++/// writing it. All three /archive verbs must translate that into a 409 with
++/// actionable guidance instead of leaking the raw "rootfs not found" message.
++@Suite("ContainerArchiveRoute — missing rootfs")
++struct ContainerArchiveRouteTests {
++
++    @Test("GET /archive returns 409 with actionable guidance")
++    func getMissingRootfs() async throws {
++        let archive = FakeArchiveClient(getResult: .failure(.rootfsNotFound(id: "web")))
++        let snapshot = try makeContainerSnapshot(nativeId: "web", ip: "192.168.65.2", network: "bridge", labels: [:], status: .stopped)
++        try await withArchiveApp(snapshot: snapshot, archive: archive) { app in
++            try await app.testing().test(.GET, "/v1.51/containers/web/archive?path=/etc") { res async in
++                #expect(res.status == .conflict)
++                #expect(res.body.string.contains("docker rm -f"))
++            }
++        }
++    }
++
++    @Test("HEAD /archive returns 409 with actionable guidance")
++    func headMissingRootfs() async throws {
++        let archive = FakeArchiveClient(getResult: .failure(.rootfsNotFound(id: "web")))
++        let snapshot = try makeContainerSnapshot(nativeId: "web", ip: "192.168.65.2", network: "bridge", labels: [:], status: .stopped)
++        try await withArchiveApp(snapshot: snapshot, archive: archive) { app in
++            try await app.testing().test(.HEAD, "/v1.51/containers/web/archive?path=/etc") { res async in
++                #expect(res.status == .conflict)
++            }
++        }
++    }
++
++    @Test("PUT /archive returns 409 with actionable guidance")
++    func putMissingRootfs() async throws {
++        let archive = FakeArchiveClient(putResult: .failure(.rootfsNotFound(id: "web")))
++        let snapshot = try makeContainerSnapshot(nativeId: "web", ip: "192.168.65.2", network: "bridge", labels: [:], status: .stopped)
++        try await withArchiveApp(snapshot: snapshot, archive: archive) { app in
++            try await app.testing().test(
++                .PUT, "/v1.51/containers/web/archive?path=/etc",
++                beforeRequest: { req in
++                    req.body = ByteBuffer(string: "fake-tar-bytes")
++                }
++            ) { res async in
++                #expect(res.status == .conflict)
++                #expect(res.body.string.contains("docker rm -f"))
++            }
++        }
++    }
++}
++
++// MARK: - Helpers
++
++private func withArchiveApp(
++    snapshot: ContainerSnapshot?,
++    archive: FakeArchiveClient,
++    test: @escaping (Application) async throws -> Void
++) async throws {
++    let client: ClientContainerProtocol = snapshot.map { FixedArchiveSnapshotClientMock(snapshot: $0) } ?? EmptyArchiveClientMock()
++    try await withApp(configure: { _ in }) { app in
++        let regexRouter = app.regexRouter(with: app.logger)
++        app.setRegexRouter(regexRouter)
++        regexRouter.installMiddleware(on: app)
++        try app.register(collection: ContainerArchiveRoute(containerClient: client, archiveClient: archive))
++        try await test(app)
++    }
++}
++
++private actor FakeArchiveClient: ClientArchiveProtocol {
++    private let getResult: Result<(tarData: Data, stat: PathStat), ClientArchiveError>
++    private let putResult: Result<Void, ClientArchiveError>
++
++    init(
++        getResult: Result<(tarData: Data, stat: PathStat), ClientArchiveError> = .failure(.operationFailed(message: "not under test")),
++        putResult: Result<Void, ClientArchiveError> = .failure(.operationFailed(message: "not under test"))
++    ) {
++        self.getResult = getResult
++        self.putResult = putResult
++    }
++
++    nonisolated func getRootfsPath(containerId: String) -> URL {
++        URL(fileURLWithPath: "/nonexistent/rootfs.ext4")
++    }
++
++    func getArchive(containerId: String, path: String) async throws -> (tarData: Data, stat: PathStat) {
++        try getResult.get()
++    }
++
++    func putArchive(container: ContainerSnapshot, path: String, tarPath: URL, noOverwriteDirNonDir: Bool) async throws {
++        try putResult.get()
++    }
++
++    func exportRootfs(containerId: String) async throws -> URL {
++        throw ClientArchiveError.operationFailed(message: "not under test")
++    }
++}
++
++private struct FixedArchiveSnapshotClientMock: ClientContainerProtocol {
++    let snapshot: ContainerSnapshot
++
++    func list(showAll: Bool, filters: [String: [String]]) async throws -> [ContainerSnapshot] { [snapshot] }
++    func getContainer(id: String) async throws -> ContainerSnapshot? { snapshot }
++    func enforceContainerRunning(container: ContainerSnapshot) throws {}
++    func start(id: String, detachKeys: String?) async throws {}
++    func stop(id: String, signal: String?, timeout: Int?) async throws {}
++    func restart(id: String, signal: String?, timeout: Int?) async throws {}
++    func kill(id: String, signal: String?) async throws {}
++    func delete(id: String) async throws {}
++    func wait(id: String, condition: ContainerWaitCondition) async throws -> RESTContainerWait {
++        RESTContainerWait(statusCode: 0)
++    }
++    func prune(filters: [String: [String]]) async throws -> (deletedContainers: [String], spaceReclaimed: Int64) { ([], 0) }
++}
++
++private struct EmptyArchiveClientMock: ClientContainerProtocol {
++    func list(showAll: Bool, filters: [String: [String]]) async throws -> [ContainerSnapshot] { [] }
++    func getContainer(id: String) async throws -> ContainerSnapshot? { nil }
++    func enforceContainerRunning(container: ContainerSnapshot) throws {}
++    func start(id: String, detachKeys: String?) async throws {}
++    func stop(id: String, signal: String?, timeout: Int?) async throws {}
++    func restart(id: String, signal: String?, timeout: Int?) async throws {}
++    func kill(id: String, signal: String?) async throws {}
++    func delete(id: String) async throws {}
++    func wait(id: String, condition: ContainerWaitCondition) async throws -> RESTContainerWait {
++        RESTContainerWait(statusCode: 0)
++    }
++    func prune(filters: [String: [String]]) async throws -> (deletedContainers: [String], spaceReclaimed: Int64) { ([], 0) }
++}
+diff --git a/Tests/socktainerTests/Routes/ContainerExportRouteTests.swift b/Tests/socktainerTests/Routes/ContainerExportRouteTests.swift
+index 1313c7e..18fd317 100644
+--- a/Tests/socktainerTests/Routes/ContainerExportRouteTests.swift
++++ b/Tests/socktainerTests/Routes/ContainerExportRouteTests.swift
+@@ -71,13 +71,14 @@ struct ContainerExportRouteTests {
+         }
+     }
+ 
+-    @Test("a missing rootfs returns 404")
++    @Test("a missing rootfs returns 409 with actionable guidance")
+     func missingRootfs() async throws {
+         let archive = FakeArchiveClient(exportResult: .failure(.rootfsNotFound(id: "web")))
+         let snapshot = try makeContainerSnapshot(nativeId: "web", ip: "192.168.65.2", network: "bridge", labels: [:], status: .stopped)
+         try await withExportApp(snapshot: snapshot, archive: archive) { app in
+             try await app.testing().test(.GET, "/v1.51/containers/web/export") { res async in
+-                #expect(res.status == .notFound)
++                #expect(res.status == .conflict)
++                #expect(res.body.string.contains("docker rm -f"))
+             }
+         }
+     }
 diff --git a/Tests/socktainerTests/Routes/ContainerMemoryTests.swift b/Tests/socktainerTests/Routes/ContainerMemoryTests.swift
 index 3819049..a8e565f 100644
 --- a/Tests/socktainerTests/Routes/ContainerMemoryTests.swift
