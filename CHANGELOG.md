@@ -4,6 +4,12 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-22
+
+### Changed
+- Containers that don't request a memory limit of their own now default to 75% of host RAM instead of Apple Container's fixed 1 GiB — a limit tight enough that ordinary workloads (e.g. a Node/vite build) can OOM well under it. Configurable in Settings (10-90%, applies the next time Whalebridge starts).
+- Errors against a container whose runtime state is missing or corrupted (most often from an abnormal exit, like an OOM kill) now say so and suggest `docker rm -f`, instead of leaking a raw Cocoa/POSIX error like "stdio.log doesn't exist" or "Rootfs not found" — covers `docker logs`, `docker cp`/archive operations, and `docker export`.
+
 ## [0.1.3] - 2026-07-21
 
 ### Added
@@ -36,7 +42,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/cap10morgan/whalebridge/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/cap10morgan/whalebridge/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/cap10morgan/whalebridge/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/cap10morgan/whalebridge/compare/v0.1.0...v0.1.1
