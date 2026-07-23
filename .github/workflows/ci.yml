@@ -105,6 +105,10 @@ jobs:
       # though, so we can't use it here).
       - name: Start apple/container services
         run: |
+          echo "----- diagnostic: bare attempt, no pty tool at all -----"
+          sudo container system start --enable-kernel-install || true
+          sudo container system status || true
+          exit 1
           brew install tmux
           tmux -S /tmp/container.sock new-session -d "sudo login -pfq $(whoami)"
           sleep 2
