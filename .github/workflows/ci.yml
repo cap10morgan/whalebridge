@@ -91,25 +91,13 @@ jobs:
             "https://github.com/apple/container/releases/download/${VERSION}/container-installer-unsigned.pkg"
           sudo installer -pkg container.pkg -target /
 
-      # A pty tool (tmate, then tmux) was used here on the theory that
-      # `container system start` needs a real user session to talk to
-      # launchd. Diagnosed that theory away: a completely bare, un-wrapped
-      # attempt fails with the exact same XPC "Connection invalid" error,
-      # instantly — no pty involved at all. So the pty layer was a red
-      # herring; this is a race right after a fresh `container` install,
-      # where container-apiserver's launchd registration hasn't settled yet.
-      # Just retry `container system start` itself (re-running it is the
-      # documented recovery step for this error) until it succeeds.
       - name: Start apple/container services
         run: |
-          for i in $(seq 15); do
-            if sudo container system start --enable-kernel-install; then
-              break
-            fi
-            echo "attempt $i failed, retrying..."
-            sleep 3
-          done
-          sudo container system status
+          sudo container system start --enable-kernel-install || true
+          sudo container system status || true
+          echo "----- unified log: com.apple.container, last 5m -----"
+          log show --predicate 'subsystem == "com.apple.container"' --last 5m --style compact || true
+          exit 1
 
       - name: Configure the default kernel
         # --enable-kernel-install on `system start` downloads the kernel but
