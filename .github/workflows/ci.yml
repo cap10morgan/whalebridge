@@ -109,6 +109,8 @@ jobs:
             sleep 2
           done
           tmux -S /tmp/container.sock kill-session || true
+          echo "----- /tmp/container.log -----"
+          cat /tmp/container.log || echo "(no such file)"
           sudo container system status
 
       - name: Configure the default kernel
