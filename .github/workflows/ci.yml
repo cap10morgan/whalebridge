@@ -91,14 +91,22 @@ jobs:
             "https://github.com/apple/container/releases/download/${VERSION}/container-installer-unsigned.pkg"
           sudo installer -pkg container.pkg -target /
 
-      # `container system start` needs a real user session to talk to launchd,
-      # which a runner's non-interactive shell isn't — run it inside a detached
-      # tmux session (upstream socktainer CI uses tmate, a fork of tmux, for
-      # the same trick; tmate is deprecated upstream, tmux isn't).
+      # container-apiserver registers itself as a per-user LaunchAgent in the
+      # `gui/<uid>` bootstrap domain (apple/container#1514), which only exists
+      # within a real Aqua/login security session. A bare `tmux new-session`
+      # forks a pty without going through session-establishment (SessionCreate)
+      # at all, so its process tree lands outside that domain and can't reach
+      # the apiserver's mach service — confirmed by an XPC "Connection invalid"
+      # error even though `container system start` itself runs fine. `login`
+      # is what actually calls SessionCreate, so make it the pane's leader
+      # process instead of a bare shell (upstream socktainer CI sidesteps this
+      # by using tmate instead of tmux, whose SSH-relay setup goes through the
+      # same session machinery as a side effect; tmate is deprecated upstream
+      # though, so we can't use it here).
       - name: Start apple/container services
         run: |
           brew install tmux
-          tmux -S /tmp/container.sock new-session -d
+          tmux -S /tmp/container.sock new-session -d "sudo login -pfq $(whoami)"
           sleep 2
           tmux -S /tmp/container.sock send-keys \
             "sudo container system start --enable-kernel-install | tee /tmp/container.log" C-m
