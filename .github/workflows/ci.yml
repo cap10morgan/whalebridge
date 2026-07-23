@@ -91,48 +91,31 @@ jobs:
             "https://github.com/apple/container/releases/download/${VERSION}/container-installer-unsigned.pkg"
           sudo installer -pkg container.pkg -target /
 
-      # container-apiserver registers itself as a per-user LaunchAgent in the
-      # `gui/<uid>` bootstrap domain (apple/container#1514), which only exists
-      # within a real Aqua/login security session. A bare `tmux new-session`
-      # forks a pty without going through session-establishment (SessionCreate)
-      # at all, so its process tree lands outside that domain and can't reach
-      # the apiserver's mach service — confirmed by an XPC "Connection invalid"
-      # error even though `container system start` itself runs fine. `login`
-      # is what actually calls SessionCreate, so make it the pane's leader
-      # process instead of a bare shell (upstream socktainer CI sidesteps this
-      # by using tmate instead of tmux, whose SSH-relay setup goes through the
-      # same session machinery as a side effect; tmate is deprecated upstream
-      # though, so we can't use it here).
+      # A pty tool (tmate, then tmux) was used here on the theory that
+      # `container system start` needs a real user session to talk to
+      # launchd. Diagnosed that theory away: a completely bare, un-wrapped
+      # attempt fails with the exact same XPC "Connection invalid" error,
+      # instantly — no pty involved at all. So the pty layer was a red
+      # herring; this is a race right after a fresh `container` install,
+      # where container-apiserver's launchd registration hasn't settled yet.
+      # Just retry `container system start` itself (re-running it is the
+      # documented recovery step for this error) until it succeeds.
       - name: Start apple/container services
         run: |
-          echo "----- diagnostic: bare attempt, no pty tool at all -----"
-          sudo container system start --enable-kernel-install || true
-          sudo container system status || true
-          exit 1
-          brew install tmux
-          tmux -S /tmp/container.sock new-session -d "sudo login -pfq $(whoami)"
-          sleep 2
-          tmux -S /tmp/container.sock send-keys \
-            "sudo container system start --enable-kernel-install | tee /tmp/container.log" C-m
-          for _ in $(seq 60); do
-            if sudo container system status >/dev/null 2>&1; then
-              echo "container system is up"
+          for i in $(seq 15); do
+            if sudo container system start --enable-kernel-install; then
               break
             fi
-            sleep 2
+            echo "attempt $i failed, retrying..."
+            sleep 3
           done
-          echo "----- tmux pane -----"
-          tmux -S /tmp/container.sock capture-pane -p || true
-          tmux -S /tmp/container.sock kill-session || true
-          echo "----- /tmp/container.log -----"
-          cat /tmp/container.log || echo "(no such file)"
           sudo container system status
 
       - name: Configure the default kernel
         # --enable-kernel-install on `system start` downloads the kernel but
-        # doesn't reliably register it as default when driven non-interactively
-        # through tmux; `container create` then fails with "default kernel
-        # not configured". --force since the file it downloads already exists.
+        # doesn't reliably register it as default when run non-interactively
+        # in CI; `container create` then fails with "default kernel not
+        # configured". --force since the file it downloads already exists.
         run: sudo container system kernel set --recommended --force
 
       - name: Start socktainer
