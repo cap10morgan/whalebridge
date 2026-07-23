@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- `docker logs --tail N` is now honored (previously the full log was always returned). Line-count-based, so it works despite Apple Container not recording per-line write times — which also remains why `--since`/`--until` can't be supported and `-t` stamps read time rather than emission time.
+
 ### Fixed
 - `docker buildx build` now works end to end. Two bugs were blocking it: Apple Container only materializes a container's filesystem at start, not at create, so buildx seeding files into its BuildKit builder container before starting it (its docker-container driver's normal bootstrap sequence) failed outright — Whalebridge now bootstraps such a container on demand (booting its VM without yet launching its command) so the seed succeeds, and the `/start` that follows reuses that same bootstrap rather than erroring on a redundant one. Separately, `HostConfig.Privileged` was silently dropped entirely; it's now treated as granting all capabilities (the closest available equivalent), which BuildKit's build container needs to mount build contexts. Verified against two real Dockerfiles (apt-get + multi-stage COPY, and Leiningen/Maven) built and run successfully.
 - The 0.1.4 "container's runtime state is missing or corrupted" message was wrong for a container that simply hasn't been started yet — that case (like buildx's, above) now either succeeds automatically or, if the automatic recovery itself fails, correctly says to run `docker start` rather than `docker rm -f`. A container that genuinely started and then lost its state (e.g. an OOM kill) still gets the crash/`docker rm -f` guidance.
