@@ -91,32 +91,37 @@ jobs:
             "https://github.com/apple/container/releases/download/${VERSION}/container-installer-unsigned.pkg"
           sudo installer -pkg container.pkg -target /
 
-      # `container system start` needs a real user session to talk to launchd,
-      # which a runner's non-interactive shell isn't — run it inside a detached
-      # tmate session (upstream socktainer CI uses the same trick).
+      # `container system start` writes the apiserver launchd plist, then
+      # bootstraps it via a launchctl call whose output AND exit status it
+      # discards (ServiceManager.register in apple/container). It derives the
+      # target domain from `launchctl managername` + getuid(): under sudo in
+      # a CI session that yields a domain like user/0 that can't be
+      # bootstrapped into, so the registration silently fails and start dies
+      # at "Testing access to container-apiserver" with an XPC error.
+      # Fix: when the first start fails, it has already written the plist —
+      # bootstrap it into the system domain ourselves (Mach lookups chain
+      # gui -> user -> system, so a system-domain service is reachable from
+      # any session; the plist's LimitLoadToSessionType allows System), then
+      # re-run start, which now passes its ping and completes the
+      # init-filesystem and kernel setup it skips on failure. Gated on the
+      # first start failing so an eventual upstream fix doesn't turn the
+      # bootstrap into a spurious "already bootstrapped" error.
       - name: Start apple/container services
         run: |
-          brew install tmate
-          tmate -S /tmp/tmate.sock new-session -d
-          tmate -S /tmp/tmate.sock wait tmate-ready
-          tmate -F -S /tmp/tmate.sock send-keys "q" C-m
-          tmate -S /tmp/tmate.sock send-keys \
-            "sudo container system start --enable-kernel-install | tee /tmp/container.log" C-m
-          for _ in $(seq 60); do
-            if sudo container system status >/dev/null 2>&1; then
-              echo "container system is up"
-              break
-            fi
-            sleep 2
-          done
-          tmate -S /tmp/tmate.sock kill-session || true
+          if ! sudo container system start --enable-kernel-install; then
+            PLIST="$(sudo find /var/root "$HOME" -maxdepth 6 \
+              -path '*/com.apple.container/apiserver/apiserver.plist' 2>/dev/null | head -1)"
+            [ -n "$PLIST" ] || { echo "apiserver.plist not found" >&2; exit 1; }
+            sudo launchctl bootstrap system "$PLIST"
+            sudo container system start --enable-kernel-install
+          fi
           sudo container system status
 
       - name: Configure the default kernel
         # --enable-kernel-install on `system start` downloads the kernel but
-        # doesn't reliably register it as default when driven non-interactively
-        # through tmate; `container create` then fails with "default kernel
-        # not configured". --force since the file it downloads already exists.
+        # doesn't reliably register it as default when run non-interactively
+        # in CI; `container create` then fails with "default kernel not
+        # configured". --force since the file it downloads already exists.
         run: sudo container system kernel set --recommended --force
 
       - name: Start socktainer
