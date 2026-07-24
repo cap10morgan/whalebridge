@@ -4,6 +4,8 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-07-24
+
 ### Changed
 - The menu bar icon now reflects Apple's container services, not just the Whalebridge daemon: it's dimmed whenever docker commands wouldn't work (including a running daemon over stopped container services) and animates while Whalebridge starts or restarts those services, as well as during its own startup.
 - Builds made from a bare git commit now identify as that commit's short sha (About dialog, Docker API platform version) instead of masquerading as a release version.
@@ -59,7 +61,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/cap10morgan/whalebridge/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/cap10morgan/whalebridge/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/cap10morgan/whalebridge/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/cap10morgan/whalebridge/compare/v0.1.2...v0.1.3
