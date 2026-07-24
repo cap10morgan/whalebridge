@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- The menu bar icon now reflects Apple's container services, not just the Whalebridge daemon: it's dimmed whenever docker commands wouldn't work (including a running daemon over stopped container services) and animates while Whalebridge starts or restarts those services, as well as during its own startup.
+
 ### Added
 - `docker logs --tail N` is now honored (previously the full log was always returned). Line-count-based, so it works despite Apple Container not recording per-line write times — which also remains why `--since`/`--until` can't be supported and `-t` stamps read time rather than emission time.
 

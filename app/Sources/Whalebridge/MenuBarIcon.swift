@@ -49,6 +49,27 @@ enum MenuBarIcon {
     }
 }
 
+/// Which glyph the menu bar shows. Pure decision logic, kept separate from the
+/// NSImage loading so it's unit-testable.
+enum MenuBarIconState: Equatable {
+    case animating
+    case active
+    case inactive
+
+    /// Both the daemon and Apple's container services gate usability: docker
+    /// commands work only when socktainer is running *and* the apiserver is up,
+    /// so anything less than that is inactive (dimmed) — including a running
+    /// daemon over a stopped apiserver. Animation covers every transition we
+    /// drive: daemon startup, and starting/restarting Apple's services.
+    static func forState(
+        daemon: DaemonManager.State, apiserverRunning: Bool, apiserverTransitioning: Bool
+    ) -> Self {
+        if apiserverTransitioning || daemon == .starting { return .animating }
+        if daemon == .running && apiserverRunning { return .active }
+        return .inactive
+    }
+}
+
 /// Drives the frame loop while the daemon is coming up. Kept separate from
 /// DaemonManager so a redraw 12x a second doesn't republish daemon state.
 @MainActor
@@ -76,23 +97,31 @@ final class MenuBarAnimator: ObservableObject {
     }
 }
 
-/// The menu bar's label: animates while starting, otherwise a static glyph.
+/// The menu bar's label: animates through transitions, full-strength only when
+/// docker commands would actually work, dimmed otherwise.
 struct MenuBarLabel: View {
     @ObservedObject var daemon: DaemonManager
     @StateObject private var animator = MenuBarAnimator()
 
     var body: some View {
         Image(nsImage: image)
-            .onChange(of: daemon.state == .starting, initial: true) { _, starting in
-                if starting { animator.start() } else { animator.stop() }
+            .onChange(of: iconState == .animating, initial: true) { _, animating in
+                if animating { animator.start() } else { animator.stop() }
             }
     }
 
+    private var iconState: MenuBarIconState {
+        .forState(
+            daemon: daemon.state,
+            apiserverRunning: daemon.apiserverRunning,
+            apiserverTransitioning: daemon.apiserverTransitioning)
+    }
+
     private var image: NSImage {
-        switch daemon.state {
-        case .starting: MenuBarIcon.startingFrames[animator.frame]
-        case .running: MenuBarIcon.running
-        default: MenuBarIcon.stopped
+        switch iconState {
+        case .animating: MenuBarIcon.startingFrames[animator.frame]
+        case .active: MenuBarIcon.running
+        case .inactive: MenuBarIcon.stopped
         }
     }
 }
