@@ -9,6 +9,10 @@ All notable changes to Whalebridge are documented in this file.
 
 ### Fixed
 - A wedged Apple Container runtime (apple/container#1884: container/network operations hang indefinitely while reads keep working) could stop Whalebridge's daemon from starting at all — startup housekeeping (DNS-sidecar adoption, orphaned-network reaping) blocked forever on hung XPC calls and the Docker API socket was never created. That housekeeping is now time-boxed to 30 seconds; on timeout the daemon logs a warning, skips it, and comes up anyway.
+
+## [0.1.5] - 2026-07-22
+
+### Fixed
 - `docker buildx build` now works end to end. Two bugs were blocking it: Apple Container only materializes a container's filesystem at start, not at create, so buildx seeding files into its BuildKit builder container before starting it (its docker-container driver's normal bootstrap sequence) failed outright — Whalebridge now bootstraps such a container on demand (booting its VM without yet launching its command) so the seed succeeds, and the `/start` that follows reuses that same bootstrap rather than erroring on a redundant one. Separately, `HostConfig.Privileged` was silently dropped entirely; it's now treated as granting all capabilities (the closest available equivalent), which BuildKit's build container needs to mount build contexts. Verified against two real Dockerfiles (apt-get + multi-stage COPY, and Leiningen/Maven) built and run successfully.
 - The 0.1.4 "container's runtime state is missing or corrupted" message was wrong for a container that simply hasn't been started yet — that case (like buildx's, above) now either succeeds automatically or, if the automatic recovery itself fails, correctly says to run `docker start` rather than `docker rm -f`. A container that genuinely started and then lost its state (e.g. an OOM kill) still gets the crash/`docker rm -f` guidance.
 
@@ -50,7 +54,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/cap10morgan/whalebridge/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/cap10morgan/whalebridge/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/cap10morgan/whalebridge/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/cap10morgan/whalebridge/compare/v0.1.1...v0.1.2

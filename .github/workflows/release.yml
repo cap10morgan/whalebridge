@@ -20,6 +20,17 @@ jobs:
         with:
           submodules: true
 
+      # A tag whose version has no changelog section means [Unreleased] wasn't
+      # rolled over before tagging (it happened for v0.1.5) — fail fast, before
+      # any build work, so the fix is just: update CHANGELOG.md, re-tag.
+      - name: Check CHANGELOG has a section for this version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          grep -q "^## \[$VERSION\]" CHANGELOG.md || {
+            echo "CHANGELOG.md has no '## [$VERSION]' section — move the [Unreleased] items into one before tagging." >&2
+            exit 1
+          }
+
       - name: Select latest Xcode 26
         run: |
           sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
