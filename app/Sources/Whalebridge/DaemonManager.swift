@@ -186,11 +186,9 @@ final class DaemonManager: ObservableObject {
         daemon.executableURL = daemonURL
         daemon.arguments = ["--no-docker-context"]
         // Brand `docker version` output (patches/0001-brandable-platform-name.patch).
-        let appVersion =
-            Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         daemon.environment = ProcessInfo.processInfo.environment.merging([
             "SOCKTAINER_PLATFORM_NAME": "Whalebridge",
-            "SOCKTAINER_PLATFORM_VERSION": appVersion,
+            "SOCKTAINER_PLATFORM_VERSION": AppVersion.current,
             // Default memory limit for containers that don't request their own
             // (patches/0002-container-lifecycle-and-buildx-fixes.patch),
             // configurable in Settings.
