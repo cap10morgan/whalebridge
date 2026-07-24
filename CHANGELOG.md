@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- `docker buildx build` could fail outright with a raw `internalError`/`exists` message when multiple builds ran concurrently against the same builder (e.g. a multi-image build script) — Apple Container correctly rejects the loser of the race to create the shared `buildx_buildkit_*` container, but that rejection surfaced as a generic HTTP 500 instead of Docker's real "name already in use" 409 Conflict, which buildx relies on to recognize the race as benign and reuse the winner's container. Verified end to end: concurrent `docker buildx build` runs against a fresh builder now both complete successfully.
+
 ## [0.1.6] - 2026-07-24
 
 ### Changed
