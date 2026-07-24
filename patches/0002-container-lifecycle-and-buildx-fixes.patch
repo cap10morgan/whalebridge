@@ -307,10 +307,10 @@ index fb69bac..35a5e16 100644
                  Dead: container.status == .stopped && !isPendingRestart,
                  Pid: 0,  // we have no mechanism to derive PID in Apple container
 diff --git a/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift b/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift
-index bf4a6f1..83285d8 100644
+index bf4a6f1..6684fbb 100644
 --- a/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift
 +++ b/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift
-@@ -29,7 +29,17 @@ extension ContainerLogsRoute {
+@@ -29,13 +29,32 @@ extension ContainerLogsRoute {
  
              // always use the container's log, not the boot of the container
              let boot = false
@@ -329,6 +329,79 @@ index bf4a6f1..83285d8 100644
              let fileHandle = boot ? fhs[1] : fhs[0]
              // Create a streaming body
              // `follow=1` means tail like
+             let follow = MobyBool.queryValue(req.query["follow"] as String?)
+             let timestamps = MobyBool.queryValue(req.query["timestamps"] as String?)
+ 
++            // Docker's `tail` limits output to the last N lines of existing log
++            // content ("all" or absent = unlimited). It's line-count-based, so it
++            // works without the per-line write times Apple Container doesn't
++            // record — unlike `since`/`until`, which can't be honored here.
++            if let tailLines = ContainerLogsRoute.tailLineCount(req.query["tail"] as String?) {
++                let offset = ContainerLogsRoute.tailStartOffset(fileHandle: fileHandle, lines: tailLines)
++                try? fileHandle.seek(toOffset: offset)
++            }
++
+             let body = Response.Body { writer in
+                 Task.detached {
+                     var buffer = Data()
+@@ -163,6 +182,57 @@ extension ContainerLogsRoute {
+         Data("\(AppleContainerTimestampResolver.iso8601Timestamp(Date())) ".utf8)
+     }
+ 
++    /// Parses Docker's `tail` query value. nil/"all" mean unlimited and return
++    /// nil; a non-negative integer returns that line count. Anything unparsable
++    /// or negative is treated as unlimited, matching the docker CLI's default
++    /// of "all" and the daemon's leniency toward malformed values.
++    static func tailLineCount(_ raw: String?) -> Int? {
++        guard let raw, raw != "all", let n = Int(raw), n >= 0 else { return nil }
++        return n
++    }
++
++    /// Byte offset where the last `lines` lines of the log file begin, found by
++    /// scanning backward in chunks so large logs aren't read into memory. A
++    /// trailing newline at EOF terminates the final line rather than starting a
++    /// new one, matching how Docker counts `tail` lines. `lines == 0` returns
++    /// EOF (no history emitted); a file with fewer lines than requested returns
++    /// 0 (everything). The handle's offset is left unspecified — callers seek
++    /// to the returned offset before reading.
++    static func tailStartOffset(fileHandle: FileHandle, lines: Int) -> UInt64 {
++        guard let size = try? fileHandle.seekToEnd(), size > 0 else { return 0 }
++        guard lines > 0 else { return size }
++
++        let chunkSize: UInt64 = 4096
++        var newlinesNeeded = lines
++        var pos = size
++        var skipTrailingNewline = true
++
++        while pos > 0 {
++            let readStart = pos > chunkSize ? pos - chunkSize : 0
++            guard (try? fileHandle.seek(toOffset: readStart)) != nil,
++                let chunk = try? fileHandle.read(upToCount: Int(pos - readStart)),
++                !chunk.isEmpty
++            else { return 0 }
++            let bytes = [UInt8](chunk)
++            var i = bytes.count - 1
++            if skipTrailingNewline {
++                if bytes[i] == 0x0A { i -= 1 }
++                skipTrailingNewline = false
++            }
++            while i >= 0 {
++                if bytes[i] == 0x0A {
++                    newlinesNeeded -= 1
++                    if newlinesNeeded == 0 {
++                        return readStart + UInt64(i) + 1
++                    }
++                }
++                i -= 1
++            }
++            pos = readStart
++        }
++        return 0
++    }
++
+     /// Match the container's TTY mode: a TTY produces a raw, unmultiplexed stream, while
+     /// non-TTY logs use Docker's 8-byte stdcopy framing. Shared with the attach/exec routes
+     /// via writeDockerFrame so the wire format is defined in exactly one place.
 diff --git a/Sources/socktainer/Utilities/MissingContainerRuntimeState.swift b/Sources/socktainer/Utilities/MissingContainerRuntimeState.swift
 new file mode 100644
 index 0000000..5cd3916
@@ -678,6 +751,106 @@ index 1313c7e..4e6f271 100644
              }
          }
      }
+diff --git a/Tests/socktainerTests/Routes/ContainerLogsTailTests.swift b/Tests/socktainerTests/Routes/ContainerLogsTailTests.swift
+new file mode 100644
+index 0000000..42de6ce
+--- /dev/null
++++ b/Tests/socktainerTests/Routes/ContainerLogsTailTests.swift
+@@ -0,0 +1,94 @@
++import Foundation
++import Testing
++
++@testable import socktainer
++
++@Suite("Container logs tail")
++struct ContainerLogsTailTests {
++
++    // MARK: - tailLineCount
++
++    @Test("absent and \"all\" mean unlimited")
++    func unlimitedValues() {
++        #expect(ContainerLogsRoute.tailLineCount(nil) == nil)
++        #expect(ContainerLogsRoute.tailLineCount("all") == nil)
++    }
++
++    @Test("non-negative integers are line counts")
++    func validCounts() {
++        #expect(ContainerLogsRoute.tailLineCount("0") == 0)
++        #expect(ContainerLogsRoute.tailLineCount("5") == 5)
++        #expect(ContainerLogsRoute.tailLineCount("1000") == 1000)
++    }
++
++    @Test("unparsable and negative values are treated as unlimited")
++    func invalidValues() {
++        #expect(ContainerLogsRoute.tailLineCount("abc") == nil)
++        #expect(ContainerLogsRoute.tailLineCount("-3") == nil)
++        #expect(ContainerLogsRoute.tailLineCount("") == nil)
++        #expect(ContainerLogsRoute.tailLineCount("2.5") == nil)
++    }
++
++    // MARK: - tailStartOffset
++
++    private func withLogFile<T>(_ content: String, _ body: (FileHandle) throws -> T) throws -> T {
++        let url = FileManager.default.temporaryDirectory
++            .appendingPathComponent("tail-test-\(UUID().uuidString).log")
++        try Data(content.utf8).write(to: url)
++        defer { try? FileManager.default.removeItem(at: url) }
++        let handle = try FileHandle(forReadingFrom: url)
++        defer { try? handle.close() }
++        return try body(handle)
++    }
++
++    @Test("empty file returns 0")
++    func emptyFile() throws {
++        try withLogFile("") { fh in
++            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 1) == 0)
++        }
++    }
++
++    @Test("zero lines returns EOF so no history is emitted")
++    func zeroLines() throws {
++        try withLogFile("a\nb\nc\n") { fh in
++            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 0) == 6)
++        }
++    }
++
++    @Test("last N lines of a newline-terminated file")
++    func newlineTerminated() throws {
++        // "a\nb\nc\n" — offsets: a=0, b=2, c=4
++        try withLogFile("a\nb\nc\n") { fh in
++            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 1) == 4)
++            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 2) == 2)
++            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 3) == 0)
++        }
++    }
++
++    @Test("a trailing partial line with no newline counts as a line")
++    func unterminatedFinalLine() throws {
++        // "a\nb\nc" — c has no trailing newline but is still the last line
++        try withLogFile("a\nb\nc") { fh in
++            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 1) == 4)
++            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 2) == 2)
++        }
++    }
++
++    @Test("requesting more lines than exist returns the whole file")
++    func moreThanAvailable() throws {
++        try withLogFile("a\nb\nc\n") { fh in
++            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 99) == 0)
++        }
++    }
++
++    @Test("lines longer than the scan chunk size are handled")
++    func longLinesAcrossChunks() throws {
++        // A 5000-byte line forces the backward scan across chunk boundaries.
++        let long = String(repeating: "x", count: 5000)
++        let content = long + "\nend\n"
++        try withLogFile(content) { fh in
++            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 1) == 5001)
++            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 2) == 0)
++        }
++    }
++}
 diff --git a/Tests/socktainerTests/Routes/ContainerMemoryTests.swift b/Tests/socktainerTests/Routes/ContainerMemoryTests.swift
 index 3819049..a8e565f 100644
 --- a/Tests/socktainerTests/Routes/ContainerMemoryTests.swift
