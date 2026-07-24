@@ -209,7 +209,7 @@ index 2ae9e15..efb2dc7 100644
                      throw Abort(.internalServerError, reason: error.localizedDescription)
                  }
 diff --git a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
-index 1f78ac7..2581402 100644
+index 1f78ac7..2c91987 100644
 --- a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
 +++ b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
 @@ -98,8 +98,11 @@ extension ContainerCreateRoute {
@@ -225,7 +225,17 @@ index 1f78ac7..2581402 100644
                      capDrop: body.HostConfig?.CapDrop ?? [])
              } catch {
                  throw Abort(.badRequest, reason: "invalid capability: \(error)")
-@@ -813,6 +816,18 @@ extension ContainerCreateRoute {
+@@ -668,6 +671,9 @@ extension ContainerCreateRoute {
+                 container = try await containerClient.get(id: containerConfiguration.id)
+                 req.logger.debug("Container created successfully with ID: \(container.id)")
+             } catch {
++                if let conflict = ContainerCreateRoute.existingContainerConflict(in: error, requestedId: containerConfiguration.id) {
++                    throw conflict
++                }
+                 req.logger.error("Failed to create container: \(error)")
+                 throw Abort(.internalServerError, reason: "Failed to create container: \(error)")
+             }
+@@ -813,6 +819,48 @@ extension ContainerCreateRoute {
          max(1, nanoCpus / 1_000_000_000)
      }
  
@@ -241,10 +251,40 @@ index 1f78ac7..2581402 100644
 +        return requested + ["ALL"]
 +    }
 +
++    /// Apple Container's create serializes concurrent creates under a lock and
++    /// rejects a second create for the same id with a `.exists` error, wrapped
++    /// as the `cause` of the internalError ContainerClient.create throws on any
++    /// XPC failure — so the interesting code can be a couple of layers down,
++    /// not on the top-level error. This is exactly the race buildx's
++    /// docker-container driver is built to survive: when several `docker buildx
++    /// build` processes bootstrap the same builder container concurrently
++    /// (e.g. a multi-image build script), all but one lose the create race.
++    /// Real Docker reports that as an HTTP 409 Conflict, which is what buildx's
++    /// error classification (keyed off status code, not message text) checks
++    /// for to treat the loss as benign and reuse the winner's container instead
++    /// of failing the whole build. Flattening every create failure to a 500,
++    /// as the generic catch-all used to, hid that signal and turned a
++    /// same-machine build race into a hard failure.
++    static func existingContainerConflict(in error: Error, requestedId: String) -> Abort? {
++        var current: Error? = error
++        while let containerizationError = current as? ContainerizationError {
++            if containerizationError.code == .exists {
++                return Abort(
++                    .conflict,
++                    reason:
++                        "Conflict. The container name \"\(requestedId)\" is already in use."
++                        + " You have to remove (or rename) that container to be able to reuse that name."
++                )
++            }
++            current = containerizationError.cause
++        }
++        return nil
++    }
++
      /// Encodes a restart policy for label persistence, matching Docker semantics of not
      /// persisting the default ("no"/empty) policy. Returns nil (and logs) on encode failure.
      static func restartPolicyLabel(for policy: RestartPolicy?, logger: Logger) -> String? {
-@@ -902,9 +917,27 @@ func convertPortBindings(from portBindings: [String: [PortBinding]]) throws -> [
+@@ -902,9 +950,27 @@ func convertPortBindings(from portBindings: [String: [PortBinding]]) throws -> [
  }
  
  // Maps Docker HostConfig.Memory (bytes, 0 = no limit) to Apple Container memoryInBytes.
@@ -752,10 +792,18 @@ index 0000000..1a53a32
 +    func prune(filters: [String: [String]]) async throws -> (deletedContainers: [String], spaceReclaimed: Int64) { ([], 0) }
 +}
 diff --git a/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift b/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
-index 3cb63eb..26a5e31 100644
+index 3cb63eb..e8ffe16 100644
 --- a/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
 +++ b/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
-@@ -382,6 +382,22 @@ struct CapabilityValidationTests {
+@@ -1,6 +1,7 @@
+ import ContainerAPIClient
+ import ContainerPersistence
+ import ContainerResource
++import ContainerizationError
+ import Foundation
+ import Logging
+ import Testing
+@@ -382,6 +383,22 @@ struct CapabilityValidationTests {
              }
          }
      }
@@ -778,7 +826,7 @@ index 3cb63eb..26a5e31 100644
  }
  
  @Suite("ContainerCreateRoute.vCpus")
-@@ -406,6 +422,32 @@ struct VCpusConversionTests {
+@@ -406,6 +423,67 @@ struct VCpusConversionTests {
      }
  }
  
@@ -805,6 +853,41 @@ index 3cb63eb..26a5e31 100644
 +    func notPrivilegedUnchanged() {
 +        #expect(ContainerCreateRoute.resolveCapAdd(requested: [], privileged: false) == [])
 +        #expect(ContainerCreateRoute.resolveCapAdd(requested: ["NET_ADMIN"], privileged: false) == ["NET_ADMIN"])
++    }
++}
++
++@Suite("ContainerCreateRoute.existingContainerConflict")
++struct ExistingContainerConflictTests {
++
++    @Test("a top-level .exists ContainerizationError maps to 409 Conflict")
++    func topLevelExists() throws {
++        let error = ContainerizationError(.exists, message: "container already exists: foo")
++        let conflict = try #require(ContainerCreateRoute.existingContainerConflict(in: error, requestedId: "foo"))
++        #expect(conflict.status == .conflict)
++        #expect(conflict.reason.contains("foo"))
++    }
++
++    @Test("a .exists error wrapped as the cause of ContainerClient.create's internalError still maps to 409")
++    func wrappedInCreateClientError() throws {
++        // Mirrors apple/container's ContainerClient.create, which wraps any XPC
++        // failure in a fresh internalError with the original as `cause`.
++        let inner = ContainerizationError(.exists, message: "container already exists: buildx_buildkit_whalebridge")
++        let outer = ContainerizationError(.internalError, message: "failed to create container", cause: inner)
++        let conflict = try #require(
++            ContainerCreateRoute.existingContainerConflict(in: outer, requestedId: "buildx_buildkit_whalebridge"))
++        #expect(conflict.status == .conflict)
++    }
++
++    @Test("an unrelated error returns nil so the generic 500 path still applies")
++    func unrelatedErrorReturnsNil() {
++        let error = ContainerizationError(.notFound, message: "no such image")
++        #expect(ContainerCreateRoute.existingContainerConflict(in: error, requestedId: "foo") == nil)
++    }
++
++    @Test("a non-ContainerizationError returns nil")
++    func nonContainerizationErrorReturnsNil() {
++        struct SomeOtherError: Error {}
++        #expect(ContainerCreateRoute.existingContainerConflict(in: SomeOtherError(), requestedId: "foo") == nil)
 +    }
 +}
 +
