@@ -470,6 +470,89 @@ index 0000000..308e227
 +        pending.removeValue(forKey: id)
 +    }
 +}
+diff --git a/Sources/socktainer/Utilities/StartupHousekeeping.swift b/Sources/socktainer/Utilities/StartupHousekeeping.swift
+new file mode 100644
+index 0000000..9ca93dd
+--- /dev/null
++++ b/Sources/socktainer/Utilities/StartupHousekeeping.swift
+@@ -0,0 +1,43 @@
++import Foundation
++
++/// Runs best-effort startup work under a deadline that the work itself cannot
++/// extend or ignore.
++///
++/// Startup housekeeping (DNS-sidecar adoption, orphaned-network reaping) calls
++/// into Apple Container over XPC, and those calls can hang forever when the
++/// runtime is wedged (apple/container#1884: per-container/network operations
++/// hang indefinitely while reads keep working). Task cancellation can't
++/// interrupt an await stuck inside an XPC continuation, so a plain
++/// timeout-and-cancel race deadlocks with it. Instead the work runs in a
++/// detached task and the caller resumes on whichever finishes first — the work
++/// or the deadline. On timeout the stuck task is abandoned (it holds no
++/// resources the daemon needs) so startup can proceed and bind the API socket;
++/// the alternative is a daemon that never comes up at all.
++enum StartupHousekeeping {
++    /// Runs `work`, returning `true` if it finished within `timeout` and
++    /// `false` if it was abandoned at the deadline.
++    static func runBounded(timeout: Duration, _ work: @escaping @Sendable () async -> Void) async -> Bool {
++        final class Once: @unchecked Sendable {
++            private let lock = NSLock()
++            private var resumed = false
++            func claim() -> Bool {
++                lock.lock()
++                defer { lock.unlock() }
++                guard !resumed else { return false }
++                resumed = true
++                return true
++            }
++        }
++        let once = Once()
++        return await withCheckedContinuation { continuation in
++            Task.detached {
++                await work()
++                if once.claim() { continuation.resume(returning: true) }
++            }
++            Task.detached {
++                try? await Task.sleep(for: timeout)
++                if once.claim() { continuation.resume(returning: false) }
++            }
++        }
++    }
++}
+diff --git a/Sources/socktainer/configure.swift b/Sources/socktainer/configure.swift
+index ceb15ce..a01d740 100644
+--- a/Sources/socktainer/configure.swift
++++ b/Sources/socktainer/configure.swift
+@@ -235,12 +235,22 @@ func configure(_ app: Application) async throws {
+         }
+     }
+ 
+-    await dnsManager.adoptOrRemoveSidecarsFromPreviousRun()
+-
+-    // Reap networks orphaned by a previous run (containers removed, network left behind).
+-    // Apple Container's vmnet state degrades as stale networks accumulate and eventually
+-    // breaks container-to-container routing (EHOSTUNREACH); runs after the DNS-sidecar
+-    // cleanup so a network whose only member was its sidecar now appears empty.
+-    await OrphanedNetworkReaper.reap(networkClient: networkClient, logger: app.logger)
++    // Sidecar adoption and network reaping (in that order — a network whose only
++    // member was its sidecar must appear empty to the reaper) are best-effort
++    // housekeeping over XPC calls that hang indefinitely when the runtime is
++    // wedged (apple/container#1884). Time-box them: a daemon that skips
++    // housekeeping still serves clients, one that never binds its socket serves
++    // nothing. Network reaping context: Apple Container's vmnet state degrades
++    // as orphaned networks accumulate and eventually breaks container-to-container
++    // routing (EHOSTUNREACH).
++    let housekeepingLogger = app.logger
++    let housekeepingFinished = await StartupHousekeeping.runBounded(timeout: .seconds(30)) {
++        await dnsManager.adoptOrRemoveSidecarsFromPreviousRun()
++        await OrphanedNetworkReaper.reap(networkClient: ClientNetworkService(), logger: housekeepingLogger)
++    }
++    if !housekeepingFinished {
++        app.logger.warning(
++            "[startup] DNS-sidecar adoption / orphaned-network reaping did not finish within 30s — continuing startup without it. The container runtime may be unhealthy (see apple/container#1884).")
++    }
+ 
+ }
 diff --git a/Tests/socktainerTests/ContainerSnapshotFixture.swift b/Tests/socktainerTests/ContainerSnapshotFixture.swift
 index 48cdf33..b1c76f6 100644
 --- a/Tests/socktainerTests/ContainerSnapshotFixture.swift
@@ -1041,5 +1124,57 @@ index 0000000..0c19f01
 +        await registry.store(id: "db", process: FakeClientProcess(id: "db"))
 +        #expect(await registry.take(id: "web")?.id == "web")
 +        #expect(await registry.take(id: "db")?.id == "db")
++    }
++}
+diff --git a/Tests/socktainerTests/Utilities/StartupHousekeepingTests.swift b/Tests/socktainerTests/Utilities/StartupHousekeepingTests.swift
+new file mode 100644
+index 0000000..b3161bf
+--- /dev/null
++++ b/Tests/socktainerTests/Utilities/StartupHousekeepingTests.swift
+@@ -0,0 +1,46 @@
++import Foundation
++import Testing
++
++@testable import socktainer
++
++@Suite("Startup housekeeping deadline")
++struct StartupHousekeepingTests {
++
++    @Test("work that finishes in time returns true")
++    func finishesInTime() async {
++        let finished = await StartupHousekeeping.runBounded(timeout: .seconds(5)) {
++            // completes immediately
++        }
++        #expect(finished == true)
++    }
++
++    @Test("work that outlives the deadline is abandoned and returns false")
++    func abandonedAtDeadline() async {
++        let finished = await StartupHousekeeping.runBounded(timeout: .milliseconds(50)) {
++            // Simulates an XPC await that never resolves and ignores
++            // cancellation — sleep is cancellable, but nothing cancels the
++            // abandoned task, so it stands in for a stuck continuation.
++            try? await Task.sleep(for: .seconds(600))
++        }
++        #expect(finished == false)
++    }
++
++    @Test("work finishing after the deadline does not double-resume")
++    func lateFinishIsHarmless() async throws {
++        let finished = await StartupHousekeeping.runBounded(timeout: .milliseconds(20)) {
++            try? await Task.sleep(for: .milliseconds(60))
++        }
++        #expect(finished == false)
++        // Give the late worker time to complete its claim() after the timeout
++        // already resumed — a double-resume would crash the process here.
++        try await Task.sleep(for: .milliseconds(120))
++    }
++
++    @Test("slow-but-in-time work still returns true")
++    func slowWorkWithinDeadline() async {
++        let finished = await StartupHousekeeping.runBounded(timeout: .seconds(5)) {
++            try? await Task.sleep(for: .milliseconds(30))
++        }
++        #expect(finished == true)
 +    }
 +}
