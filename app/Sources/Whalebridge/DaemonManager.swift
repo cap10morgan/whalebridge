@@ -54,6 +54,9 @@ final class DaemonManager: ObservableObject {
 
     @Published private(set) var state: State = .stopped
     @Published private(set) var apiserverRunning = false
+    /// True while Whalebridge itself is starting or restarting Apple's
+    /// container services — the menu bar icon animates through it.
+    @Published private(set) var apiserverTransitioning = false
     @Published private(set) var runtimeStatus: RuntimeStatus = .checking
     @Published private(set) var installProgress: String?
     @Published private(set) var installError: String?
@@ -300,6 +303,8 @@ final class DaemonManager: ObservableObject {
 
     func startApiserver() async {
         guard containerCLIInstalled else { return }
+        apiserverTransitioning = true
+        defer { apiserverTransitioning = false }
         let result = await Shell.run(containerCLI, ["system", "start"])
         if result.status != 0 {
             NSLog("container system start exited \(result.status): \(result.output)")
@@ -311,6 +316,8 @@ final class DaemonManager: ObservableObject {
     /// no-op, so this is safe to call whenever the running apiserver's
     /// version is in doubt.
     private func restartApiserver() async {
+        apiserverTransitioning = true
+        defer { apiserverTransitioning = false }
         let result = await Shell.run(containerCLI, ["system", "stop"])
         if result.status != 0 {
             NSLog("container system stop exited \(result.status): \(result.output)")

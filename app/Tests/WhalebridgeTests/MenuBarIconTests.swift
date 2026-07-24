@@ -22,3 +22,45 @@ import Testing
         #expect(MenuBarIcon.stopped.isTemplate)
     }
 }
+
+/// The icon reflects whether docker commands would actually work (daemon
+/// running AND Apple's container services up), animates through transitions
+/// we drive, and is dimmed for everything else.
+@Suite struct MenuBarIconStateTests {
+    @Test func activeOnlyWhenDaemonAndApiserverBothUp() {
+        #expect(
+            MenuBarIconState.forState(daemon: .running, apiserverRunning: true, apiserverTransitioning: false)
+                == .active)
+    }
+
+    @Test func runningDaemonOverStoppedApiserverIsInactive() {
+        #expect(
+            MenuBarIconState.forState(daemon: .running, apiserverRunning: false, apiserverTransitioning: false)
+                == .inactive)
+    }
+
+    @Test func daemonStartupAnimates() {
+        #expect(
+            MenuBarIconState.forState(daemon: .starting, apiserverRunning: false, apiserverTransitioning: false)
+                == .animating)
+    }
+
+    @Test func apiserverStartOrRestartAnimatesRegardlessOfDaemonState() {
+        for state: DaemonManager.State in [.stopped, .starting, .running, .waitingForRuntime] {
+            #expect(
+                MenuBarIconState.forState(daemon: state, apiserverRunning: false, apiserverTransitioning: true)
+                    == .animating)
+        }
+    }
+
+    @Test func everythingElseIsInactive() {
+        for state: DaemonManager.State in [.stopped, .waitingForRuntime, .failed("boom")] {
+            for apiserver in [true, false] {
+                #expect(
+                    MenuBarIconState.forState(
+                        daemon: state, apiserverRunning: apiserver, apiserverTransitioning: false)
+                        == .inactive)
+            }
+        }
+    }
+}
