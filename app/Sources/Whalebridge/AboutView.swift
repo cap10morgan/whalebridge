@@ -3,9 +3,7 @@ import SwiftUI
 struct AboutView: View {
     @ObservedObject var updater: Updater
 
-    private var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
-    }
+    private var version: String { AppVersion.current }
 
     var body: some View {
         VStack(spacing: 16) {

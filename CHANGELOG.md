@@ -6,6 +6,8 @@ All notable changes to Whalebridge are documented in this file.
 
 ### Changed
 - The menu bar icon now reflects Apple's container services, not just the Whalebridge daemon: it's dimmed whenever docker commands wouldn't work (including a running daemon over stopped container services) and animates while Whalebridge starts or restarts those services, as well as during its own startup.
+- Builds made from a bare git commit now identify as that commit's short sha (About dialog, Docker API platform version) instead of masquerading as a release version.
+- The socktainer component version in `docker version` now reports the vendored release (or pinned short sha) with a `-wbN` suffix for Whalebridge's local patch revision — e.g. `v1.1.1-wb7` — instead of `0.0.0-dev`.
 
 ### Added
 - `docker logs --tail N` is now honored (previously the full log was always returned). Line-count-based, so it works despite Apple Container not recording per-line write times — which also remains why `--since`/`--until` can't be supported and `-t` stamps read time rather than emission time.

@@ -8,7 +8,9 @@ APP_BIN="$ROOT/app/.build/release/Whalebridge"
 DAEMON_BIN="$ROOT/vendor/socktainer/.build/release/socktainer"
 SPARKLE_FW="$ROOT/app/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 OUT="$ROOT/build/Whalebridge.app"
-VERSION="${VERSION:-0.1.0}"
+# Releases pass VERSION from the tag; a bundle built from a bare git commit
+# identifies as that commit's short sha instead of masquerading as a release.
+VERSION="${VERSION:-$(git -C "$ROOT" rev-parse --short HEAD)}"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 # Sparkle: where the app looks for updates, and the public half of the EdDSA key
 # whose private half lives in the release manager's login keychain. An empty
