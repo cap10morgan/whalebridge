@@ -4,6 +4,8 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-24
+
 ### Fixed
 - `docker buildx build` could fail outright with a raw `internalError`/`exists` message when multiple builds ran concurrently against the same builder (e.g. a multi-image build script) — Apple Container correctly rejects the loser of the race to create the shared `buildx_buildkit_*` container, but that rejection surfaced as a generic HTTP 500 instead of Docker's real "name already in use" 409 Conflict, which buildx relies on to recognize the race as benign and reuse the winner's container. Verified end to end: concurrent `docker buildx build` runs against a fresh builder now both complete successfully.
 
@@ -64,7 +66,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/cap10morgan/whalebridge/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/cap10morgan/whalebridge/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/cap10morgan/whalebridge/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/cap10morgan/whalebridge/compare/v0.1.3...v0.1.4
