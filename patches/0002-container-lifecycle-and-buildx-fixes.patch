@@ -16,10 +16,10 @@ index d4e4063..ad565a4 100644
              return "Invalid path: \(path)"
          case .notADirectory(let path):
 diff --git a/Sources/socktainer/Clients/ClientContainerService.swift b/Sources/socktainer/Clients/ClientContainerService.swift
-index f15c80d..33822c1 100644
+index b2ebdc9..6f062d2 100644
 --- a/Sources/socktainer/Clients/ClientContainerService.swift
 +++ b/Sources/socktainer/Clients/ClientContainerService.swift
-@@ -277,6 +277,16 @@ struct ClientContainerService: ClientContainerProtocol {
+@@ -279,6 +279,16 @@ struct ClientContainerService: ClientContainerProtocol {
      }
  
      private func startInternal(container: ContainerSnapshot) async throws {
@@ -36,10 +36,10 @@ index f15c80d..33822c1 100644
          let stdin: FileHandle? = nil
          let stdout: FileHandle? = nil
          let stderr: FileHandle? = nil
-@@ -285,21 +295,7 @@ struct ClientContainerService: ClientContainerProtocol {
+@@ -287,21 +297,7 @@ struct ClientContainerService: ClientContainerProtocol {
  
          do {
-             let process = try await containerClient.bootstrap(id: container.id, stdio: stdio)
+             let process = try await containerClient.withClient { try await $0.bootstrap(id: container.id, stdio: stdio) }
 -            // Clear any exit code recorded by a previous run of this container so
 -            // /wait blocks for the new init process rather than immediately
 -            // returning the stale code (e.g. after a restart).
@@ -59,7 +59,7 @@ index f15c80d..33822c1 100644
          } catch {
              // NOTE: If bootstrap fails because container is already booted,
              //       the attach handler may have already bootstrapped it
-@@ -313,6 +309,23 @@ struct ClientContainerService: ClientContainerProtocol {
+@@ -315,6 +311,23 @@ struct ClientContainerService: ClientContainerProtocol {
          }
      }
  
@@ -81,10 +81,10 @@ index f15c80d..33822c1 100644
 +    }
 +
      func stop(id: String, signal: String?, timeout: Int?) async throws {
-         let id = ContainerNameUtility.sanitize(id)
          guard let container = try await getContainer(id: id) else {
+             throw ClientContainerError.notFound(id: id)
 diff --git a/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift b/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift
-index 2ae9e15..efb2dc7 100644
+index a7aae03..5498e77 100644
 --- a/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift
 +++ b/Sources/socktainer/Routes/Containers/ContainerArchiveRoute.swift
 @@ -1,4 +1,5 @@
@@ -149,7 +149,7 @@ index 2ae9e15..efb2dc7 100644
  
                  // Create the path stat header (base64 encoded JSON)
                  let statJson = try JSONEncoder().encode(stat)
-@@ -78,7 +119,7 @@ struct ContainerArchiveRoute: RouteCollection {
+@@ -84,7 +125,7 @@ struct ContainerArchiveRoute: RouteCollection {
                  case .pathNotFound:
                      throw Abort(.notFound, reason: error.localizedDescription)
                  case .rootfsNotFound:
@@ -158,7 +158,7 @@ index 2ae9e15..efb2dc7 100644
                  default:
                      throw Abort(.internalServerError, reason: error.localizedDescription)
                  }
-@@ -145,12 +186,14 @@ struct ContainerArchiveRoute: RouteCollection {
+@@ -151,12 +192,14 @@ struct ContainerArchiveRoute: RouteCollection {
              }
  
              do {
@@ -177,9 +177,9 @@ index 2ae9e15..efb2dc7 100644
 +                    )
 +                }
  
-                 return Response(status: .ok)
-             } catch let error as ClientArchiveError {
-@@ -158,7 +201,7 @@ struct ContainerArchiveRoute: RouteCollection {
+                 // moby emits "extract-to-dir" after a successful extraction
+                 // (daemon/archive_unix.go).
+@@ -170,7 +213,7 @@ struct ContainerArchiveRoute: RouteCollection {
                  case .pathNotFound:
                      throw Abort(.notFound, reason: error.localizedDescription)
                  case .rootfsNotFound:
@@ -188,7 +188,7 @@ index 2ae9e15..efb2dc7 100644
                  case .invalidPath:
                      throw Abort(.badRequest, reason: error.localizedDescription)
                  default:
-@@ -186,7 +229,9 @@ struct ContainerArchiveRoute: RouteCollection {
+@@ -198,7 +241,9 @@ struct ContainerArchiveRoute: RouteCollection {
              }
  
              do {
@@ -199,7 +199,7 @@ index 2ae9e15..efb2dc7 100644
  
                  // Create the path stat header (base64 encoded JSON)
                  let statJson = try JSONEncoder().encode(stat)
-@@ -201,7 +246,7 @@ struct ContainerArchiveRoute: RouteCollection {
+@@ -213,7 +258,7 @@ struct ContainerArchiveRoute: RouteCollection {
                  case .pathNotFound:
                      throw Abort(.notFound, reason: error.localizedDescription)
                  case .rootfsNotFound:
@@ -209,7 +209,7 @@ index 2ae9e15..efb2dc7 100644
                      throw Abort(.internalServerError, reason: error.localizedDescription)
                  }
 diff --git a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
-index 1f78ac7..2c91987 100644
+index bf0d8ac..166b22d 100644
 --- a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
 +++ b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
 @@ -98,8 +98,11 @@ extension ContainerCreateRoute {
@@ -225,7 +225,7 @@ index 1f78ac7..2c91987 100644
                      capDrop: body.HostConfig?.CapDrop ?? [])
              } catch {
                  throw Abort(.badRequest, reason: "invalid capability: \(error)")
-@@ -668,6 +671,9 @@ extension ContainerCreateRoute {
+@@ -670,6 +673,9 @@ extension ContainerCreateRoute {
                  container = try await containerClient.get(id: containerConfiguration.id)
                  req.logger.debug("Container created successfully with ID: \(container.id)")
              } catch {
@@ -235,7 +235,7 @@ index 1f78ac7..2c91987 100644
                  req.logger.error("Failed to create container: \(error)")
                  throw Abort(.internalServerError, reason: "Failed to create container: \(error)")
              }
-@@ -813,6 +819,48 @@ extension ContainerCreateRoute {
+@@ -832,6 +838,48 @@ extension ContainerCreateRoute {
          max(1, nanoCpus / 1_000_000_000)
      }
  
@@ -284,7 +284,7 @@ index 1f78ac7..2c91987 100644
      /// Encodes a restart policy for label persistence, matching Docker semantics of not
      /// persisting the default ("no"/empty) policy. Returns nil (and logs) on encode failure.
      static func restartPolicyLabel(for policy: RestartPolicy?, logger: Logger) -> String? {
-@@ -902,9 +950,27 @@ func convertPortBindings(from portBindings: [String: [PortBinding]]) throws -> [
+@@ -921,9 +969,27 @@ func convertPortBindings(from portBindings: [String: [PortBinding]]) throws -> [
  }
  
  // Maps Docker HostConfig.Memory (bytes, 0 = no limit) to Apple Container memoryInBytes.
@@ -346,102 +346,6 @@ index fb69bac..35a5e16 100644
                  OOMKilled: false,
                  Dead: container.status == .stopped && !isPendingRestart,
                  Pid: 0,  // we have no mechanism to derive PID in Apple container
-diff --git a/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift b/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift
-index bf4a6f1..6684fbb 100644
---- a/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift
-+++ b/Sources/socktainer/Routes/Containers/ContainerLogsRoute.swift
-@@ -29,13 +29,32 @@ extension ContainerLogsRoute {
- 
-             // always use the container's log, not the boot of the container
-             let boot = false
--            let fhs = try await ContainerClient().logs(id: container.id)
-+            let fhs: [FileHandle]
-+            do {
-+                fhs = try await ContainerClient().logs(id: container.id)
-+            } catch {
-+                // The underlying error is a raw Cocoa/POSIX message ("stdio.log
-+                // doesn't exist") that gives no hint of what actually happened —
-+                // MissingContainerRuntimeState tells a container that simply
-+                // hasn't started yet (no logs to have) apart from one that
-+                // started and crashed, leaving its bundle incomplete.
-+                throw Abort(.conflict, reason: MissingContainerRuntimeState.message(for: container, reference: id))
-+            }
-             let fileHandle = boot ? fhs[1] : fhs[0]
-             // Create a streaming body
-             // `follow=1` means tail like
-             let follow = MobyBool.queryValue(req.query["follow"] as String?)
-             let timestamps = MobyBool.queryValue(req.query["timestamps"] as String?)
- 
-+            // Docker's `tail` limits output to the last N lines of existing log
-+            // content ("all" or absent = unlimited). It's line-count-based, so it
-+            // works without the per-line write times Apple Container doesn't
-+            // record — unlike `since`/`until`, which can't be honored here.
-+            if let tailLines = ContainerLogsRoute.tailLineCount(req.query["tail"] as String?) {
-+                let offset = ContainerLogsRoute.tailStartOffset(fileHandle: fileHandle, lines: tailLines)
-+                try? fileHandle.seek(toOffset: offset)
-+            }
-+
-             let body = Response.Body { writer in
-                 Task.detached {
-                     var buffer = Data()
-@@ -163,6 +182,57 @@ extension ContainerLogsRoute {
-         Data("\(AppleContainerTimestampResolver.iso8601Timestamp(Date())) ".utf8)
-     }
- 
-+    /// Parses Docker's `tail` query value. nil/"all" mean unlimited and return
-+    /// nil; a non-negative integer returns that line count. Anything unparsable
-+    /// or negative is treated as unlimited, matching the docker CLI's default
-+    /// of "all" and the daemon's leniency toward malformed values.
-+    static func tailLineCount(_ raw: String?) -> Int? {
-+        guard let raw, raw != "all", let n = Int(raw), n >= 0 else { return nil }
-+        return n
-+    }
-+
-+    /// Byte offset where the last `lines` lines of the log file begin, found by
-+    /// scanning backward in chunks so large logs aren't read into memory. A
-+    /// trailing newline at EOF terminates the final line rather than starting a
-+    /// new one, matching how Docker counts `tail` lines. `lines == 0` returns
-+    /// EOF (no history emitted); a file with fewer lines than requested returns
-+    /// 0 (everything). The handle's offset is left unspecified — callers seek
-+    /// to the returned offset before reading.
-+    static func tailStartOffset(fileHandle: FileHandle, lines: Int) -> UInt64 {
-+        guard let size = try? fileHandle.seekToEnd(), size > 0 else { return 0 }
-+        guard lines > 0 else { return size }
-+
-+        let chunkSize: UInt64 = 4096
-+        var newlinesNeeded = lines
-+        var pos = size
-+        var skipTrailingNewline = true
-+
-+        while pos > 0 {
-+            let readStart = pos > chunkSize ? pos - chunkSize : 0
-+            guard (try? fileHandle.seek(toOffset: readStart)) != nil,
-+                let chunk = try? fileHandle.read(upToCount: Int(pos - readStart)),
-+                !chunk.isEmpty
-+            else { return 0 }
-+            let bytes = [UInt8](chunk)
-+            var i = bytes.count - 1
-+            if skipTrailingNewline {
-+                if bytes[i] == 0x0A { i -= 1 }
-+                skipTrailingNewline = false
-+            }
-+            while i >= 0 {
-+                if bytes[i] == 0x0A {
-+                    newlinesNeeded -= 1
-+                    if newlinesNeeded == 0 {
-+                        return readStart + UInt64(i) + 1
-+                    }
-+                }
-+                i -= 1
-+            }
-+            pos = readStart
-+        }
-+        return 0
-+    }
-+
-     /// Match the container's TTY mode: a TTY produces a raw, unmultiplexed stream, while
-     /// non-TTY logs use Docker's 8-byte stdcopy framing. Shared with the attach/exec routes
-     /// via writeDockerFrame so the wire format is defined in exactly one place.
 diff --git a/Sources/socktainer/Utilities/MissingContainerRuntimeState.swift b/Sources/socktainer/Utilities/MissingContainerRuntimeState.swift
 new file mode 100644
 index 0000000..5cd3916
@@ -510,89 +414,6 @@ index 0000000..308e227
 +        pending.removeValue(forKey: id)
 +    }
 +}
-diff --git a/Sources/socktainer/Utilities/StartupHousekeeping.swift b/Sources/socktainer/Utilities/StartupHousekeeping.swift
-new file mode 100644
-index 0000000..9ca93dd
---- /dev/null
-+++ b/Sources/socktainer/Utilities/StartupHousekeeping.swift
-@@ -0,0 +1,43 @@
-+import Foundation
-+
-+/// Runs best-effort startup work under a deadline that the work itself cannot
-+/// extend or ignore.
-+///
-+/// Startup housekeeping (DNS-sidecar adoption, orphaned-network reaping) calls
-+/// into Apple Container over XPC, and those calls can hang forever when the
-+/// runtime is wedged (apple/container#1884: per-container/network operations
-+/// hang indefinitely while reads keep working). Task cancellation can't
-+/// interrupt an await stuck inside an XPC continuation, so a plain
-+/// timeout-and-cancel race deadlocks with it. Instead the work runs in a
-+/// detached task and the caller resumes on whichever finishes first — the work
-+/// or the deadline. On timeout the stuck task is abandoned (it holds no
-+/// resources the daemon needs) so startup can proceed and bind the API socket;
-+/// the alternative is a daemon that never comes up at all.
-+enum StartupHousekeeping {
-+    /// Runs `work`, returning `true` if it finished within `timeout` and
-+    /// `false` if it was abandoned at the deadline.
-+    static func runBounded(timeout: Duration, _ work: @escaping @Sendable () async -> Void) async -> Bool {
-+        final class Once: @unchecked Sendable {
-+            private let lock = NSLock()
-+            private var resumed = false
-+            func claim() -> Bool {
-+                lock.lock()
-+                defer { lock.unlock() }
-+                guard !resumed else { return false }
-+                resumed = true
-+                return true
-+            }
-+        }
-+        let once = Once()
-+        return await withCheckedContinuation { continuation in
-+            Task.detached {
-+                await work()
-+                if once.claim() { continuation.resume(returning: true) }
-+            }
-+            Task.detached {
-+                try? await Task.sleep(for: timeout)
-+                if once.claim() { continuation.resume(returning: false) }
-+            }
-+        }
-+    }
-+}
-diff --git a/Sources/socktainer/configure.swift b/Sources/socktainer/configure.swift
-index ceb15ce..a01d740 100644
---- a/Sources/socktainer/configure.swift
-+++ b/Sources/socktainer/configure.swift
-@@ -235,12 +235,22 @@ func configure(_ app: Application) async throws {
-         }
-     }
- 
--    await dnsManager.adoptOrRemoveSidecarsFromPreviousRun()
--
--    // Reap networks orphaned by a previous run (containers removed, network left behind).
--    // Apple Container's vmnet state degrades as stale networks accumulate and eventually
--    // breaks container-to-container routing (EHOSTUNREACH); runs after the DNS-sidecar
--    // cleanup so a network whose only member was its sidecar now appears empty.
--    await OrphanedNetworkReaper.reap(networkClient: networkClient, logger: app.logger)
-+    // Sidecar adoption and network reaping (in that order — a network whose only
-+    // member was its sidecar must appear empty to the reaper) are best-effort
-+    // housekeeping over XPC calls that hang indefinitely when the runtime is
-+    // wedged (apple/container#1884). Time-box them: a daemon that skips
-+    // housekeeping still serves clients, one that never binds its socket serves
-+    // nothing. Network reaping context: Apple Container's vmnet state degrades
-+    // as orphaned networks accumulate and eventually breaks container-to-container
-+    // routing (EHOSTUNREACH).
-+    let housekeepingLogger = app.logger
-+    let housekeepingFinished = await StartupHousekeeping.runBounded(timeout: .seconds(30)) {
-+        await dnsManager.adoptOrRemoveSidecarsFromPreviousRun()
-+        await OrphanedNetworkReaper.reap(networkClient: ClientNetworkService(), logger: housekeepingLogger)
-+    }
-+    if !housekeepingFinished {
-+        app.logger.warning(
-+            "[startup] DNS-sidecar adoption / orphaned-network reaping did not finish within 30s — continuing startup without it. The container runtime may be unhealthy (see apple/container#1884).")
-+    }
- 
- }
 diff --git a/Tests/socktainerTests/ContainerSnapshotFixture.swift b/Tests/socktainerTests/ContainerSnapshotFixture.swift
 index 48cdf33..b1c76f6 100644
 --- a/Tests/socktainerTests/ContainerSnapshotFixture.swift
@@ -792,18 +613,10 @@ index 0000000..1a53a32
 +    func prune(filters: [String: [String]]) async throws -> (deletedContainers: [String], spaceReclaimed: Int64) { ([], 0) }
 +}
 diff --git a/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift b/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
-index 3cb63eb..e8ffe16 100644
+index a16003e..4f2d989 100644
 --- a/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
 +++ b/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
-@@ -1,6 +1,7 @@
- import ContainerAPIClient
- import ContainerPersistence
- import ContainerResource
-+import ContainerizationError
- import Foundation
- import Logging
- import Testing
-@@ -382,6 +383,22 @@ struct CapabilityValidationTests {
+@@ -398,6 +398,22 @@ struct CapabilityValidationTests {
              }
          }
      }
@@ -819,14 +632,14 @@ index 3cb63eb..e8ffe16 100644
 +                headers: ["Content-Type": "application/json"],
 +                body: ByteBuffer(string: #"{"Image":"socktainer-nonexistent-test-image:missing","HostConfig":{"Privileged":true}}"#)
 +            ) { res async in
-+                #expect(res.status == .notFound)
++                expectReachedImageStage(res)
 +            }
 +        }
 +    }
  }
  
  @Suite("ContainerCreateRoute.vCpus")
-@@ -406,6 +423,67 @@ struct VCpusConversionTests {
+@@ -422,6 +438,67 @@ struct VCpusConversionTests {
      }
  }
  
@@ -917,106 +730,6 @@ index 1313c7e..4e6f271 100644
              }
          }
      }
-diff --git a/Tests/socktainerTests/Routes/ContainerLogsTailTests.swift b/Tests/socktainerTests/Routes/ContainerLogsTailTests.swift
-new file mode 100644
-index 0000000..42de6ce
---- /dev/null
-+++ b/Tests/socktainerTests/Routes/ContainerLogsTailTests.swift
-@@ -0,0 +1,94 @@
-+import Foundation
-+import Testing
-+
-+@testable import socktainer
-+
-+@Suite("Container logs tail")
-+struct ContainerLogsTailTests {
-+
-+    // MARK: - tailLineCount
-+
-+    @Test("absent and \"all\" mean unlimited")
-+    func unlimitedValues() {
-+        #expect(ContainerLogsRoute.tailLineCount(nil) == nil)
-+        #expect(ContainerLogsRoute.tailLineCount("all") == nil)
-+    }
-+
-+    @Test("non-negative integers are line counts")
-+    func validCounts() {
-+        #expect(ContainerLogsRoute.tailLineCount("0") == 0)
-+        #expect(ContainerLogsRoute.tailLineCount("5") == 5)
-+        #expect(ContainerLogsRoute.tailLineCount("1000") == 1000)
-+    }
-+
-+    @Test("unparsable and negative values are treated as unlimited")
-+    func invalidValues() {
-+        #expect(ContainerLogsRoute.tailLineCount("abc") == nil)
-+        #expect(ContainerLogsRoute.tailLineCount("-3") == nil)
-+        #expect(ContainerLogsRoute.tailLineCount("") == nil)
-+        #expect(ContainerLogsRoute.tailLineCount("2.5") == nil)
-+    }
-+
-+    // MARK: - tailStartOffset
-+
-+    private func withLogFile<T>(_ content: String, _ body: (FileHandle) throws -> T) throws -> T {
-+        let url = FileManager.default.temporaryDirectory
-+            .appendingPathComponent("tail-test-\(UUID().uuidString).log")
-+        try Data(content.utf8).write(to: url)
-+        defer { try? FileManager.default.removeItem(at: url) }
-+        let handle = try FileHandle(forReadingFrom: url)
-+        defer { try? handle.close() }
-+        return try body(handle)
-+    }
-+
-+    @Test("empty file returns 0")
-+    func emptyFile() throws {
-+        try withLogFile("") { fh in
-+            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 1) == 0)
-+        }
-+    }
-+
-+    @Test("zero lines returns EOF so no history is emitted")
-+    func zeroLines() throws {
-+        try withLogFile("a\nb\nc\n") { fh in
-+            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 0) == 6)
-+        }
-+    }
-+
-+    @Test("last N lines of a newline-terminated file")
-+    func newlineTerminated() throws {
-+        // "a\nb\nc\n" — offsets: a=0, b=2, c=4
-+        try withLogFile("a\nb\nc\n") { fh in
-+            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 1) == 4)
-+            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 2) == 2)
-+            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 3) == 0)
-+        }
-+    }
-+
-+    @Test("a trailing partial line with no newline counts as a line")
-+    func unterminatedFinalLine() throws {
-+        // "a\nb\nc" — c has no trailing newline but is still the last line
-+        try withLogFile("a\nb\nc") { fh in
-+            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 1) == 4)
-+            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 2) == 2)
-+        }
-+    }
-+
-+    @Test("requesting more lines than exist returns the whole file")
-+    func moreThanAvailable() throws {
-+        try withLogFile("a\nb\nc\n") { fh in
-+            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 99) == 0)
-+        }
-+    }
-+
-+    @Test("lines longer than the scan chunk size are handled")
-+    func longLinesAcrossChunks() throws {
-+        // A 5000-byte line forces the backward scan across chunk boundaries.
-+        let long = String(repeating: "x", count: 5000)
-+        let content = long + "\nend\n"
-+        try withLogFile(content) { fh in
-+            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 1) == 5001)
-+            #expect(ContainerLogsRoute.tailStartOffset(fileHandle: fh, lines: 2) == 0)
-+        }
-+    }
-+}
 diff --git a/Tests/socktainerTests/Routes/ContainerMemoryTests.swift b/Tests/socktainerTests/Routes/ContainerMemoryTests.swift
 index 3819049..a8e565f 100644
 --- a/Tests/socktainerTests/Routes/ContainerMemoryTests.swift
@@ -1207,57 +920,5 @@ index 0000000..0c19f01
 +        await registry.store(id: "db", process: FakeClientProcess(id: "db"))
 +        #expect(await registry.take(id: "web")?.id == "web")
 +        #expect(await registry.take(id: "db")?.id == "db")
-+    }
-+}
-diff --git a/Tests/socktainerTests/Utilities/StartupHousekeepingTests.swift b/Tests/socktainerTests/Utilities/StartupHousekeepingTests.swift
-new file mode 100644
-index 0000000..b3161bf
---- /dev/null
-+++ b/Tests/socktainerTests/Utilities/StartupHousekeepingTests.swift
-@@ -0,0 +1,46 @@
-+import Foundation
-+import Testing
-+
-+@testable import socktainer
-+
-+@Suite("Startup housekeeping deadline")
-+struct StartupHousekeepingTests {
-+
-+    @Test("work that finishes in time returns true")
-+    func finishesInTime() async {
-+        let finished = await StartupHousekeeping.runBounded(timeout: .seconds(5)) {
-+            // completes immediately
-+        }
-+        #expect(finished == true)
-+    }
-+
-+    @Test("work that outlives the deadline is abandoned and returns false")
-+    func abandonedAtDeadline() async {
-+        let finished = await StartupHousekeeping.runBounded(timeout: .milliseconds(50)) {
-+            // Simulates an XPC await that never resolves and ignores
-+            // cancellation — sleep is cancellable, but nothing cancels the
-+            // abandoned task, so it stands in for a stuck continuation.
-+            try? await Task.sleep(for: .seconds(600))
-+        }
-+        #expect(finished == false)
-+    }
-+
-+    @Test("work finishing after the deadline does not double-resume")
-+    func lateFinishIsHarmless() async throws {
-+        let finished = await StartupHousekeeping.runBounded(timeout: .milliseconds(20)) {
-+            try? await Task.sleep(for: .milliseconds(60))
-+        }
-+        #expect(finished == false)
-+        // Give the late worker time to complete its claim() after the timeout
-+        // already resumed — a double-resume would crash the process here.
-+        try await Task.sleep(for: .milliseconds(120))
-+    }
-+
-+    @Test("slow-but-in-time work still returns true")
-+    func slowWorkWithinDeadline() async {
-+        let finished = await StartupHousekeeping.runBounded(timeout: .seconds(5)) {
-+            try? await Task.sleep(for: .milliseconds(30))
-+        }
-+        #expect(finished == true)
 +    }
 +}
