@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Updated the bundled socktainer daemon to v1.2.1, which pins Apple's container runtime to 1.2.0 (up from 1.1.0) — Whalebridge now offers to install 1.2.0 on systems running an older version, the same way it has for every prior runtime bump. Two of our local patches were dropped because socktainer absorbed the same fixes upstream: the wedged-runtime startup timeout (from our own contribution, socktainer#327) and `docker logs --tail` (socktainer's own independent implementation). The remaining patches (platform branding, default memory limit, corrupted-runtime-state error messages, buildx bootstrap-on-demand + Privileged support, and the concurrent-create 409 mapping) were manually re-merged against upstream's own changes to the same files and re-verified.
+
 ## [0.1.7] - 2026-07-24
 
 ### Fixed

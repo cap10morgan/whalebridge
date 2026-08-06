@@ -19,8 +19,8 @@ APPCAST_URL="${APPCAST_URL:-https://github.com/cap10morgan/whalebridge/releases/
 SUPUBLIC_ED_KEY="${SUPUBLIC_ED_KEY:-hMwzmzzRFbLpZ4YmzHAxM8v1Py1WV7vEhItZ4n8oQLI=}"
 # apple/container version the vendored socktainer pins — the app offers to
 # install exactly this version on first run.
-REQUIRED_CONTAINER_VERSION="$(sed -n 's/.*appleContainerVersion = "\([0-9.]*\)".*/\1/p' "$ROOT/vendor/socktainer/Package.swift" | head -1)"
-[[ -n "$REQUIRED_CONTAINER_VERSION" ]] || { echo "could not read appleContainerVersion from vendor/socktainer/Package.swift" >&2; exit 1; }
+REQUIRED_CONTAINER_VERSION="$(sed -n 's|.*apple/container\.git", exact: "\([0-9.]*\)".*|\1|p' "$ROOT/vendor/socktainer/Package.swift" | head -1)"
+[[ -n "$REQUIRED_CONTAINER_VERSION" ]] || { echo "could not read apple/container version from vendor/socktainer/Package.swift" >&2; exit 1; }
 
 for bin in "$APP_BIN" "$DAEMON_BIN"; do
     [[ -x "$bin" ]] || { echo "missing $bin — run make bundle" >&2; exit 1; }

@@ -86,7 +86,7 @@ jobs:
       - name: Install apple/container (the version socktainer pins)
         run: |
           chmod 755 socktainer
-          VERSION="$(sed -n 's/.*appleContainerVersion = "\([0-9.]*\)".*/\1/p' vendor/socktainer/Package.swift | head -1)"
+          VERSION="$(sed -n 's|.*apple/container\.git", exact: "\([0-9.]*\)".*|\1|p' vendor/socktainer/Package.swift | head -1)"
           curl -fsSL -o container.pkg \
             "https://github.com/apple/container/releases/download/${VERSION}/container-installer-unsigned.pkg"
           sudo installer -pkg container.pkg -target /

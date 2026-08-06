@@ -43,7 +43,7 @@ run: bundle
 	open build/Whalebridge.app
 
 # Run the app unbundled for quick iteration (daemon must be built).
-REQUIRED_CONTAINER_VERSION := $(shell sed -n 's/.*appleContainerVersion = "\([0-9.]*\)".*/\1/p' vendor/socktainer/Package.swift | head -1)
+REQUIRED_CONTAINER_VERSION := $(shell sed -n 's|.*apple/container\.git", exact: "\([0-9.]*\)".*|\1|p' vendor/socktainer/Package.swift | head -1)
 .PHONY: dev
 dev:
 	cd app && WHALEBRIDGE_DAEMON=$(DAEMON_BIN) WHALEBRIDGE_CONTAINER_VERSION=$(REQUIRED_CONTAINER_VERSION) \
