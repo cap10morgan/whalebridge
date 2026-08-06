@@ -15,7 +15,7 @@ and wiring up a Docker context so `docker ps` just works.
 ## Requirements
 
 - macOS 26+ on Apple silicon
-- [apple/container](https://github.com/apple/container/releases) 1.1.x installed
+- [apple/container](https://github.com/apple/container/releases) 1.2.x installed
   (`container --version`)
 - A Docker API client to point at it (e.g. `brew install docker`)
 
