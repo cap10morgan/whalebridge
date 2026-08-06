@@ -4,6 +4,8 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-06
+
 ### Changed
 - Updated the bundled socktainer daemon to v1.2.1, which pins Apple's container runtime to 1.2.0 (up from 1.1.0) — Whalebridge now offers to install 1.2.0 on systems running an older version, the same way it has for every prior runtime bump. Two of our local patches were dropped because socktainer absorbed the same fixes upstream: the wedged-runtime startup timeout (from our own contribution, socktainer#327) and `docker logs --tail` (socktainer's own independent implementation). The remaining patches (platform branding, default memory limit, corrupted-runtime-state error messages, buildx bootstrap-on-demand + Privileged support, and the concurrent-create 409 mapping) were manually re-merged against upstream's own changes to the same files and re-verified.
 
@@ -69,7 +71,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/cap10morgan/whalebridge/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/cap10morgan/whalebridge/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/cap10morgan/whalebridge/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/cap10morgan/whalebridge/compare/v0.1.4...v0.1.5
