@@ -1,3 +1,5 @@
+[![CI](https://github.com/cap10morgan/whalebridge/actions/workflows/ci.yml/badge.svg)](https://github.com/cap10morgan/whalebridge/actions/workflows/ci.yml)
+
 # Whalebridge
 
 A macOS menu bar app that lets Docker API clients (docker CLI, compose,
