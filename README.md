@@ -41,12 +41,16 @@ install automatically via Sparkle) won't prompt again.
 
 ## Architecture
 
-```
-docker CLI ──unix socket──▶ socktainer daemon ──XPC──▶ container-apiserver ──▶ per-container VMs
- (client)     (~/.socktainer/container.sock)            (apple/container)       (Containerization/
-                     ▲                                                           Virtualization.framework)
-                     │ spawns, supervises, monitors
-              Whalebridge.app (menu bar)
+```mermaid
+flowchart LR
+    docker["docker CLI\nclient"] --> socktainer
+
+    subgraph wb ["Whalebridge.app — menu bar, spawns/supervises/monitors/updates"]
+        direction LR
+        socktainer["socktainer\nunix socket"] --> apiserver["container-apiserver\nXPC"] --> vms["per-container VMs\nVirtualization.framework"]
+    end
+
+    style wb stroke-dasharray: 5 5
 ```
 
 ## Build
