@@ -47,7 +47,7 @@
     text-align: center;
     padding: 64px 24px 40px;
   }
-  header.hero img {
+  .hero-icon {
     width: 96px;
     height: 96px;
     border-radius: 22px;
@@ -66,12 +66,19 @@
   }
   .badges {
     display: flex;
+    align-items: center;
     justify-content: center;
     gap: 8px;
     flex-wrap: wrap;
     margin-bottom: 28px;
   }
-  .badges img { height: 20px; display: block; }
+  .badges a { display: inline-flex; }
+  .badges img {
+    width: auto;
+    height: 20px;
+    max-width: none;
+    display: block;
+  }
   .cta {
     display: flex;
     justify-content: center;
@@ -147,7 +154,7 @@
 <body>
 <main>
   <header class="hero">
-    <img src="icon.png" width="96" height="96" alt="Whalebridge icon">
+    <img class="hero-icon" src="icon.png" width="96" height="96" alt="Whalebridge icon">
     <h1>Whalebridge</h1>
     <p class="tagline">
       A macOS menu bar app that lets Docker API clients — the docker CLI,
