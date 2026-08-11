@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whalebridge — Docker on Apple's container runtime</title>
+<meta name="description" content="A macOS menu bar app that lets Docker API clients talk to Apple's native container runtime.">
+<link rel="icon" href="icon.png">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #5b5b5b;
+    --border: #e2e2e2;
+    --card: #f7f7f8;
+    --accent: #0a66ff;
+    --accent-fg: #ffffff;
+    --code-bg: #f2f2f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0d0f;
+      --fg: #f0f0f2;
+      --muted: #a3a3ab;
+      --border: #2a2a2e;
+      --card: #17171a;
+      --accent: #4d94ff;
+      --accent-fg: #0d0d0f;
+      --code-bg: #17171a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 24px 80px;
+  }
+  header.hero {
+    text-align: center;
+    padding: 64px 24px 40px;
+  }
+  header.hero img {
+    width: 96px;
+    height: 96px;
+    border-radius: 22px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  }
+  h1 {
+    font-size: 2.1rem;
+    margin: 20px 0 8px;
+    letter-spacing: -0.02em;
+  }
+  .tagline {
+    color: var(--muted);
+    font-size: 1.15rem;
+    max-width: 46ch;
+    margin: 0 auto 28px;
+  }
+  .badges {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 28px;
+  }
+  .badges img { height: 20px; display: block; }
+  .cta {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    display: inline-block;
+    padding: 12px 22px;
+    border-radius: 10px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.98rem;
+    border: 1px solid var(--border);
+  }
+  .btn.primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-color: var(--accent);
+  }
+  .btn.secondary {
+    background: transparent;
+    color: var(--fg);
+  }
+  section {
+    margin: 56px 0;
+  }
+  h2 {
+    font-size: 1.35rem;
+    margin-bottom: 14px;
+    letter-spacing: -0.01em;
+  }
+  p { color: var(--muted); }
+  ul { color: var(--muted); padding-left: 1.3em; }
+  li { margin: 4px 0; }
+  li code, p code {
+    background: var(--code-bg);
+    color: var(--fg);
+    padding: 0.15em 0.45em;
+    border-radius: 5px;
+    font-size: 0.9em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .diagram {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--muted);
+    white-space: pre;
+  }
+  ol {
+    color: var(--muted);
+    padding-left: 1.3em;
+  }
+  ol li { margin: 10px 0; }
+  footer {
+    border-top: 1px solid var(--border);
+    padding-top: 28px;
+    margin-top: 64px;
+    color: var(--muted);
+    font-size: 0.85rem;
+    text-align: center;
+  }
+  footer a { color: inherit; }
+  footer p { color: inherit; margin: 6px 0; }
+</style>
+</head>
+<body>
+<main>
+  <header class="hero">
+    <img src="icon.png" width="96" height="96" alt="Whalebridge icon">
+    <h1>Whalebridge</h1>
+    <p class="tagline">
+      A macOS menu bar app that lets Docker API clients — the docker CLI,
+      Compose, Testcontainers, your IDE — talk to Apple's native
+      <a href="https://github.com/apple/container">container</a> runtime.
+    </p>
+    <div class="badges">
+      <a href="https://github.com/cap10morgan/whalebridge/releases/latest">
+        <img src="https://img.shields.io/github/v/release/cap10morgan/whalebridge" alt="Latest release">
+      </a>
+      <a href="https://github.com/cap10morgan/whalebridge/actions/workflows/ci.yml">
+        <img src="https://github.com/cap10morgan/whalebridge/actions/workflows/ci.yml/badge.svg" alt="CI status">
+      </a>
+    </div>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/cap10morgan/whalebridge/releases/latest">Download for macOS</a>
+      <a class="btn secondary" href="https://github.com/cap10morgan/whalebridge">View on GitHub</a>
+    </div>
+  </header>
+
+  <section>
+    <h2>What it does</h2>
+    <p>
+      Apple's <code>container</code> runs real Linux containers on Apple silicon
+      using lightweight per-container VMs — but it doesn't speak the Docker
+      Engine API, so the huge ecosystem of Docker tooling can't talk to it
+      directly. Whalebridge bundles a patched
+      <a href="https://github.com/socktainer/socktainer">socktainer</a>
+      daemon that translates between the two, and handles everything around
+      it: starting and supervising the daemon, keeping Apple's container
+      services running and up to date, and wiring up a Docker context so
+      <code>docker ps</code> just works.
+    </p>
+  </section>
+
+  <section>
+    <h2>Requirements</h2>
+    <ul>
+      <li>macOS 26+ on Apple silicon</li>
+      <li><a href="https://github.com/apple/container/releases">apple/container</a> 1.2.x — Whalebridge offers to install it for you on first launch, and keeps it current</li>
+      <li>A Docker API client to point at it, e.g. <code>brew install docker</code></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>How it fits together</h2>
+    <div class="diagram">docker CLI ──unix socket──▶ socktainer daemon ──XPC──▶ container-apiserver ──▶ per-container VMs
+ (client)     (~/.socktainer/container.sock)            (apple/container)       (Containerization/
+                     ▲                                                           Virtualization.framework)
+                     │ spawns, supervises, monitors
+              Whalebridge.app (menu bar)</div>
+  </section>
+
+  <section>
+    <h2>Getting started</h2>
+    <ol>
+      <li>Download the latest release and move <strong>Whalebridge.app</strong> into <code>/Applications</code>.</li>
+      <li>Launch it. If Apple's container runtime isn't installed yet — or is out of date — Whalebridge offers to fetch and install the right version for you.</li>
+      <li>Whalebridge starts its daemon automatically and offers to make itself your default Docker context.</li>
+      <li><code>docker ps</code>, <code>docker build</code>, <code>docker compose up</code> — it's just Docker from here.</li>
+    </ol>
+    <p>
+      Updates ship automatically via <a href="https://sparkle-project.org">Sparkle</a> —
+      no need to redownload for future releases.
+    </p>
+  </section>
+
+  <footer>
+    <p>Apache License 2.0 — see <a href="https://github.com/cap10morgan/whalebridge/blob/main/LICENSE">LICENSE</a>.</p>
+    <p>
+      Docker is a registered trademark of Docker, Inc. Whalebridge is not
+      affiliated with or endorsed by Docker, Inc. or Apple Inc.
+    </p>
+    <p>
+      <a href="https://github.com/cap10morgan/whalebridge">GitHub</a> ·
+      <a href="https://github.com/cap10morgan/whalebridge/issues">Issues</a> ·
+      <a href="https://github.com/cap10morgan/whalebridge/releases">Releases</a>
+    </p>
+  </footer>
+</main>
+</body>
+</html>
