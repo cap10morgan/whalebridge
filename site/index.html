@@ -290,6 +290,17 @@
     <h2>Getting started</h2>
     <ol>
       <li>Download the latest release and move <strong>Whalebridge.app</strong> into <code>/Applications</code>.</li>
+      <li>
+        The first time you open it, macOS blocks it as being from an
+        "unidentified developer" — Whalebridge isn't notarized, since that
+        requires a paid Apple Developer Program membership this free project
+        doesn't have. Open <strong>System Settings → Privacy &amp; Security</strong>,
+        scroll to the security message naming Whalebridge near the bottom,
+        and click <strong>Open Anyway</strong>. (Prefer the terminal?
+        <code>xattr -cr /Applications/Whalebridge.app</code> skips the
+        prompt entirely.) macOS only asks once — future updates won't
+        prompt again.
+      </li>
       <li>Launch it. If Apple's container runtime isn't installed yet — or is out of date — Whalebridge offers to fetch and install the right version for you.</li>
       <li>Whalebridge starts its daemon automatically and offers to make itself your default Docker context.</li>
       <li><code>docker ps</code>, <code>docker build</code>, <code>docker compose up</code> — it's just Docker from here.</li>

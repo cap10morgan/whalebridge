@@ -20,6 +20,25 @@ and wiring up a Docker context so `docker ps` just works.
   (`container --version`)
 - A Docker API client to point at it (e.g. `brew install docker`)
 
+## Installation
+
+Download the latest release from the [Releases page](https://github.com/cap10morgan/whalebridge/releases/latest), unzip it, and move **Whalebridge.app** into `/Applications`.
+
+Whalebridge isn't notarized — that requires enrolling in the paid Apple
+Developer Program, which this free, hobby project doesn't do — so Gatekeeper
+blocks a downloaded copy's first launch as being from an "unidentified
+developer." To get past that one-time block:
+
+- **GUI**: try opening it normally first. If it's blocked, open **System
+  Settings → Privacy & Security**, scroll down to the security message near
+  the bottom (it names Whalebridge), and click **Open Anyway**. Confirm once
+  more in the dialog that follows.
+- **Terminal**: `xattr -cr /Applications/Whalebridge.app` clears the
+  quarantine flag directly, skipping the Gatekeeper prompt entirely.
+
+After that first launch, macOS remembers your choice — future updates (which
+install automatically via Sparkle) won't prompt again.
+
 ## Architecture
 
 ```
