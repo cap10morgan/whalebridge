@@ -4,6 +4,7 @@ on:
   push:
     paths-ignore: &non-app-paths
       - "site/**"
+      - "assets/**"
       - "**/*.md"
       - "LICENSE"
       - "NOTICE"
