@@ -1,5 +1,6 @@
 [![CI](https://github.com/cap10morgan/whalebridge/actions/workflows/ci.yml/badge.svg)](https://github.com/cap10morgan/whalebridge/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/cap10morgan/whalebridge)](https://github.com/cap10morgan/whalebridge/releases/latest)
+[![Website](https://img.shields.io/website?url=https%3A%2F%2Fcap10morgan.github.io%2Fwhalebridge%2F)](https://cap10morgan.github.io/whalebridge/)
 
 # Whalebridge
 
