@@ -2,7 +2,15 @@ name: CI
 
 on:
   push:
+    paths-ignore: &non-app-paths
+      - "site/**"
+      - "**/*.md"
+      - "LICENSE"
+      - "NOTICE"
+      - ".claude/**"
+      - ".github/workflows/pages.yml"
   pull_request:
+    paths-ignore: *non-app-paths
 
 jobs:
   # Build the app package and run its tests.
