@@ -153,21 +153,43 @@
     padding: 0 2px;
     flex-shrink: 0;
   }
-  .flow-supervisor {
+  .flow-row {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 2px;
-    margin: 4px auto 0;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 4px;
   }
-  /* Points up into the socktainer node above it; .flow-supervisor is a
-     column regardless of viewport width, so this never needs a separate
-     mobile override the way the horizontal main flow's arrows do. */
-  .flow-supervisor .flow-arrow { transform: rotate(-90deg); }
-  .flow-supervisor .flow-node { border-style: dashed; }
+  /* Everything Whalebridge actually spawns and supervises, boxed together
+     so containment — not just an arrow — shows what's "inside" the app. */
+  .flow-group {
+    position: relative;
+    border: 1.5px dashed var(--accent);
+    border-radius: 14px;
+    padding: 32px 16px 16px;
+  }
+  .flow-group-label {
+    position: absolute;
+    top: -12px;
+    left: 14px;
+    max-width: 260px;
+    background: var(--bg);
+    padding: 0 8px;
+    font-weight: 700;
+    font-size: 0.8rem;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .flow-group-label span {
+    display: block;
+    font-weight: 400;
+    color: var(--muted);
+    font-size: 0.68rem;
+    white-space: normal;
+  }
   @media (max-width: 620px) {
-    .flow { flex-direction: column; }
-    .flow > .flow-arrow { transform: rotate(90deg); padding: 4px 0; }
+    .flow, .flow-row { flex-direction: column; }
+    .flow > .flow-arrow, .flow-row > .flow-arrow { transform: rotate(90deg); padding: 4px 0; }
   }
   ol {
     color: var(--muted);
@@ -239,15 +261,16 @@
     <div class="flow">
       <div class="flow-node"><strong>docker CLI</strong><span>client</span></div>
       <div class="flow-arrow">→</div>
-      <div class="flow-node"><strong>socktainer</strong><span>unix socket</span></div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-node"><strong>container-apiserver</strong><span>XPC</span></div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-node"><strong>per-container VMs</strong><span>Virtualization.framework</span></div>
-    </div>
-    <div class="flow-supervisor">
-      <div class="flow-arrow">→</div>
-      <div class="flow-node"><strong>Whalebridge.app</strong><span>menu bar — spawns, supervises, monitors</span></div>
+      <div class="flow-group">
+        <div class="flow-group-label">Whalebridge.app <span>menu bar — spawns, supervises, monitors</span></div>
+        <div class="flow-row">
+          <div class="flow-node"><strong>socktainer</strong><span>unix socket</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><strong>container-apiserver</strong><span>XPC</span></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-node"><strong>per-container VMs</strong><span>Virtualization.framework</span></div>
+        </div>
+      </div>
     </div>
   </section>
 
