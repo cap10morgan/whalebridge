@@ -24,11 +24,11 @@ and wiring up a Docker context so `docker ps` just works.
 
 ```mermaid
 flowchart LR
-    docker["docker CLI<br/>client"] --> socktainer
+    docker["docker CLI\nclient"] --> socktainer
 
     subgraph wb ["Whalebridge.app — menu bar, spawns/supervises/monitors/updates"]
         direction LR
-        socktainer["socktainer<br/>unix socket"] --> apiserver["container-apiserver<br/>XPC"] --> vms["per-container VMs<br/>Virtualization.framework"]
+        socktainer["socktainer\nunix socket"] --> apiserver["container-apiserver\nXPC"] --> vms["per-container VMs\nVirtualization.framework"]
     end
 
     style wb stroke-dasharray: 5 5
