@@ -122,17 +122,52 @@
     font-size: 0.9em;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
-  .diagram {
+  .flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .flow-node {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 20px;
-    overflow-x: auto;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.78rem;
-    line-height: 1.5;
+    padding: 12px 16px;
+    text-align: center;
+    min-width: 118px;
+  }
+  .flow-node strong {
+    display: block;
+    font-size: 0.88rem;
+  }
+  .flow-node span {
+    display: block;
     color: var(--muted);
-    white-space: pre;
+    font-size: 0.72rem;
+    margin-top: 3px;
+  }
+  .flow-arrow {
+    color: var(--muted);
+    font-size: 1.1rem;
+    padding: 0 2px;
+    flex-shrink: 0;
+  }
+  .flow-supervisor {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    margin: 4px auto 0;
+  }
+  /* Points up into the socktainer node above it; .flow-supervisor is a
+     column regardless of viewport width, so this never needs a separate
+     mobile override the way the horizontal main flow's arrows do. */
+  .flow-supervisor .flow-arrow { transform: rotate(-90deg); }
+  .flow-supervisor .flow-node { border-style: dashed; }
+  @media (max-width: 620px) {
+    .flow { flex-direction: column; }
+    .flow > .flow-arrow { transform: rotate(90deg); padding: 4px 0; }
   }
   ol {
     color: var(--muted);
@@ -201,11 +236,19 @@
 
   <section>
     <h2>How it fits together</h2>
-    <div class="diagram">docker CLI ──unix socket──▶ socktainer daemon ──XPC──▶ container-apiserver ──▶ per-container VMs
- (client)     (~/.socktainer/container.sock)            (apple/container)       (Containerization/
-                     ▲                                                           Virtualization.framework)
-                     │ spawns, supervises, monitors
-              Whalebridge.app (menu bar)</div>
+    <div class="flow">
+      <div class="flow-node"><strong>docker CLI</strong><span>client</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node"><strong>socktainer</strong><span>unix socket</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node"><strong>container-apiserver</strong><span>XPC</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node"><strong>per-container VMs</strong><span>Virtualization.framework</span></div>
+    </div>
+    <div class="flow-supervisor">
+      <div class="flow-arrow">→</div>
+      <div class="flow-node"><strong>Whalebridge.app</strong><span>menu bar — spawns, supervises, monitors</span></div>
+    </div>
   </section>
 
   <section>
