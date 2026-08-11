@@ -41,17 +41,18 @@ install automatically via Sparkle) won't prompt again.
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    docker["docker CLI\nclient"] --> socktainer
-
-    subgraph wb ["Whalebridge.app — menu bar, spawns/supervises/monitors/updates"]
-        direction LR
-        socktainer["socktainer\nunix socket"] --> apiserver["container-apiserver\nXPC"] --> vms["per-container VMs\nVirtualization.framework"]
-    end
-
-    style wb stroke-dasharray: 5 5
-```
+<!--
+Pre-rendered from assets/architecture.mmd instead of a live ```mermaid
+fence: GitHub overlays every rendered Mermaid diagram with a permanent
+pan/zoom/copy toolbar that has no opt-out, and for a diagram this size it
+covers real content. Regenerate after editing the source:
+  npx -y @mermaid-js/mermaid-cli -i assets/architecture.mmd -o assets/architecture-light.svg -t default -b transparent
+  npx -y @mermaid-js/mermaid-cli -i assets/architecture.mmd -o assets/architecture-dark.svg -t dark -b transparent
+-->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
+  <img src="assets/architecture-light.svg" alt="docker CLI connects to socktainer, which lives inside Whalebridge.app along with container-apiserver and per-container VMs, everything Whalebridge spawns, supervises, monitors, and updates">
+</picture>
 
 ## Build
 
