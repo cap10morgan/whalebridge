@@ -173,13 +173,18 @@
     position: relative;
     border: 1.5px dashed var(--accent);
     border-radius: 8px;
-    padding: 30px 10px 12px;
+    padding: 20px 10px 12px;
   }
+  /* Only this short, fixed title crosses the border line (the classic
+     fieldset-legend notch, built by hand since native <legend> sizing is
+     inconsistent across browsers) — its opaque background only ever needs
+     to be as wide as "Whalebridge.app" itself. The subtitle is a separate,
+     normal-flow element entirely inside the box, so its length can never
+     widen that notch and eat into the border on either side of it. */
   .flow-group-label {
     position: absolute;
-    top: -12px;
+    top: -11px;
     left: 14px;
-    max-width: 420px;
     background: var(--bg);
     padding: 0 8px;
     font-weight: 700;
@@ -187,12 +192,11 @@
     color: var(--accent);
     white-space: nowrap;
   }
-  .flow-group-label span {
-    display: block;
-    font-weight: 400;
+  .flow-group-sub {
+    text-align: left;
     color: var(--muted);
     font-size: 0.68rem;
-    white-space: normal;
+    margin: 4px 4px 12px;
   }
   @media (max-width: 620px) {
     .flow, .flow-row { flex-direction: column; }
@@ -269,7 +273,8 @@
       <div class="flow-node"><strong>docker CLI</strong><span>client</span></div>
       <div class="flow-arrow">→</div>
       <div class="flow-group">
-        <div class="flow-group-label">Whalebridge.app <span>menu bar — spawns, supervises, monitors, updates</span></div>
+        <div class="flow-group-label">Whalebridge.app</div>
+        <div class="flow-group-sub">menu bar — spawns, supervises, monitors, updates</div>
         <div class="flow-row">
           <div class="flow-node"><strong>socktainer</strong><span>unix socket</span></div>
           <div class="flow-arrow">→</div>
