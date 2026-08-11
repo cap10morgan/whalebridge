@@ -22,12 +22,16 @@ and wiring up a Docker context so `docker ps` just works.
 
 ## Architecture
 
-```
-docker CLI ──unix socket──▶ socktainer daemon ──XPC──▶ container-apiserver ──▶ per-container VMs
- (client)     (~/.socktainer/container.sock)            (apple/container)       (Containerization/
-                     ▲                                                           Virtualization.framework)
-                     │ spawns, supervises, monitors
-              Whalebridge.app (menu bar)
+```mermaid
+flowchart LR
+    docker["docker CLI<br/>client"] --> socktainer
+
+    subgraph wb ["Whalebridge.app — menu bar, spawns/supervises/monitors/updates"]
+        direction LR
+        socktainer["socktainer<br/>unix socket"] --> apiserver["container-apiserver<br/>XPC"] --> vms["per-container VMs<br/>Virtualization.framework"]
+    end
+
+    style wb stroke-dasharray: 5 5
 ```
 
 ## Build
