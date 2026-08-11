@@ -122,42 +122,49 @@
     font-size: 0.9em;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
+  /* flex-wrap is deliberately off here (and on .flow-row): at in-between
+     widths, letting flex wrap on its own splits docker CLI onto its own
+     line above the group box well before the intentional column layout
+     below kicks in — an ugly, half-mobile-looking state. The 620px
+     breakpoint is the only reflow trigger; sizing below is tuned to fit
+     the diagram in the ~672px content width above that. */
   .flow {
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 4px;
   }
   .flow-node {
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 12px 16px;
+    padding: 10px 10px;
     text-align: center;
-    min-width: 118px;
+    min-width: 84px;
   }
   .flow-node strong {
     display: block;
-    font-size: 0.88rem;
+    font-size: 0.8rem;
   }
   .flow-node span {
     display: block;
     color: var(--muted);
-    font-size: 0.72rem;
+    font-size: 0.66rem;
     margin-top: 3px;
+    overflow-wrap: anywhere;
   }
   .flow-arrow {
     color: var(--muted);
     font-size: 1.1rem;
-    padding: 0 2px;
+    padding: 0 1px;
     flex-shrink: 0;
   }
   .flow-row {
     display: flex;
     align-items: center;
     justify-content: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 4px;
   }
   /* Everything Whalebridge actually spawns and supervises, boxed together
@@ -166,7 +173,7 @@
     position: relative;
     border: 1.5px dashed var(--accent);
     border-radius: 14px;
-    padding: 32px 16px 16px;
+    padding: 30px 10px 12px;
   }
   .flow-group-label {
     position: absolute;
