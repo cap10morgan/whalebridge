@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- When installing or upgrading Apple's container runtime, Whalebridge now fetches the latest available patch release for the required major.minor (e.g. 1.2.2) instead of always installing the exact version baked in at build time (e.g. 1.2.0). Falls back to the baked-in version if the lookup fails for any reason (offline, rate-limited).
+
 ## [0.2.0] - 2026-08-06
 
 ### Changed

@@ -348,12 +348,50 @@ final class DaemonManager: ObservableObject {
         requiredContainerVersion.split(separator: ".").prefix(2).joined(separator: ".")
     }
 
+    /// Picks the highest patch tag matching `majorMinor` (e.g. "1.2") from a
+    /// list of apple/container release tag names. Pure so the selection logic
+    /// is testable without a network call; matches exact `major.minor.patch`
+    /// tags only — pre-release suffixes (e.g. "1.2.1-rc1") fail the `Int(...)`
+    /// parse and are correctly excluded.
+    nonisolated static func bestPatchTag(from tagNames: [String], majorMinor: String) -> String? {
+        let prefix = "\(majorMinor)."
+        let matches: [(patch: Int, tag: String)] = tagNames.compactMap { name in
+            guard name.hasPrefix(prefix), let patch = Int(name.dropFirst(prefix.count)) else { return nil }
+            return (patch, name)
+        }
+        return matches.max(by: { $0.patch < $1.patch })?.tag
+    }
+
+    /// The newest available patch for the major.minor socktainer requires, so
+    /// installs/upgrades always land on the latest apple/container patch
+    /// instead of the exact version baked in at build time (which only bumps
+    /// when we vendor a new socktainer). Same-minor patches are ABI-compatible
+    /// by Apple's own versioning, so falling back to the baked-in exact
+    /// version on any failure (offline, rate-limited, malformed response) is
+    /// always a safe, working choice — never blocks the install on this call.
+    private func latestPatchVersion() async -> String {
+        let fallback = requiredContainerVersion
+        guard let url = URL(string: "https://api.github.com/repos/apple/container/tags?per_page=100") else {
+            return fallback
+        }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return fallback }
+            struct Tag: Decodable { let name: String }
+            let tags = try JSONDecoder().decode([Tag].self, from: data)
+            return DaemonManager.bestPatchTag(from: tags.map(\.name), majorMinor: requiredMajorMinor) ?? fallback
+        } catch {
+            return fallback
+        }
+    }
+
     /// Download the signed apple/container installer, verify Apple's signature,
     /// and hand it to Installer.app (which owns the admin-privileges prompt).
     func installRuntime() async {
         guard installProgress == nil else { return }
         installError = nil
-        let version = requiredContainerVersion
+        installProgress = "Checking for the latest apple/container release…"
+        let version = await latestPatchVersion()
         let pkgName = "container-\(version)-installer-signed.pkg"
         installProgress = "Downloading Apple container \(version)…"
         defer { if installError != nil { installProgress = nil } }
