@@ -40,6 +40,10 @@ developer." To get past that one-time block:
 After that first launch, macOS remembers your choice — future updates (which
 install automatically via Sparkle) won't prompt again.
 
+If you'd rather skip the Gatekeeper dance, [sponsoring the
+project](https://github.com/sponsors/cap10morgan) goes toward enrolling in
+the Apple Developer Program so Whalebridge can be signed and notarized.
+
 ## Architecture
 
 <!--
