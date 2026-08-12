@@ -1,3 +1,4 @@
 [submodule "vendor/socktainer"]
 	path = vendor/socktainer
 	url = https://github.com/socktainer/socktainer.git
+	ignore = dirty
