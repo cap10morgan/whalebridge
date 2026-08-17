@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Power saving: Whalebridge can now stop both its own daemon and Apple's container services after a period of inactivity, transparently restarting them on the next Docker API request instead of requiring a manual restart. Enabled by default for new installs; existing installs can opt in from Settings, where the idle timeout (default 30 minutes) is also configurable. The menu bar icon gets a moon badge while sleeping.
+
 ### Changed
 - When installing or upgrading Apple's container runtime, Whalebridge now fetches the latest available patch release for the required major.minor (e.g. 1.2.2) instead of always installing the exact version baked in at build time (e.g. 1.2.0). Falls back to the baked-in version if the lookup fails for any reason (offline, rate-limited).
 
