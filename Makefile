@@ -49,6 +49,21 @@ dev:
 	cd app && WHALEBRIDGE_DAEMON=$(DAEMON_BIN) WHALEBRIDGE_CONTAINER_VERSION=$(REQUIRED_CONTAINER_VERSION) \
 		WHALEBRIDGE_VERSION=$$(git rev-parse --short HEAD) swift run
 
+# One-time (or --force to rebuild): a local tart base image with the macOS
+# Tahoe SetupAssistant lockout (openai/tart#1222) pre-suppressed — see
+# scripts/vm-build-golden-image.sh for why vm-smoke-test needs this instead
+# of cloning Cirrus's stock image directly.
+.PHONY: vm-golden-image
+vm-golden-image:
+	bash scripts/vm-build-golden-image.sh $(ARGS)
+
+# Installs each of the two documented install paths (the published Homebrew
+# cask and the manual release zip) into its own throwaway tart VM and drives
+# it over the Docker API — see scripts/vm-smoke-test.sh for what it covers.
+.PHONY: vm-smoke-test
+vm-smoke-test:
+	REQUIRED_CONTAINER_VERSION=$(REQUIRED_CONTAINER_VERSION) bash scripts/vm-smoke-test.sh
+
 .PHONY: clean
 clean:
 	rm -rf build app/.build
