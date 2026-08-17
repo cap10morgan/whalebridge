@@ -57,12 +57,21 @@ dev:
 vm-golden-image:
 	bash scripts/vm-build-golden-image.sh $(ARGS)
 
-# Installs each of the two documented install paths (the published Homebrew
+# Installs each of the two published-release install paths (the Homebrew
 # cask and the manual release zip) into its own throwaway tart VM and drives
 # it over the Docker API — see scripts/vm-smoke-test.sh for what it covers.
+# Override which methods run with e.g. `make vm-smoke-test METHODS="cask zip local"`.
 .PHONY: vm-smoke-test
 vm-smoke-test:
-	REQUIRED_CONTAINER_VERSION=$(REQUIRED_CONTAINER_VERSION) bash scripts/vm-smoke-test.sh
+	REQUIRED_CONTAINER_VERSION=$(REQUIRED_CONTAINER_VERSION) METHODS="$(METHODS)" bash scripts/vm-smoke-test.sh
+
+# Same as vm-smoke-test, but builds and installs the current working tree
+# (including uncommitted changes) instead of testing a published release —
+# there's no Homebrew equivalent to a formula's `head` build for this, since
+# casks only ever install pre-built artifacts.
+.PHONY: vm-smoke-test-local
+vm-smoke-test-local:
+	REQUIRED_CONTAINER_VERSION=$(REQUIRED_CONTAINER_VERSION) METHODS=local bash scripts/vm-smoke-test.sh
 
 .PHONY: clean
 clean:

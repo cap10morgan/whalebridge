@@ -142,7 +142,15 @@ final class DaemonManager: ObservableObject {
         if AppSettings.shared.powerSavingEnabled {
             // Don't eagerly start both daemons on every login just to
             // potentially sit idle — the proxy is the only thing that ever
-            // wakes them, on the first real Docker API connection.
+            // wakes them, on the first real Docker API connection. The
+            // context *definition* still has to exist right away, though:
+            // `docker --context whalebridge ...` resolves that name to a
+            // socket path by reading this file, before it ever attempts a
+            // connection — on a fresh install where start() has never run
+            // even once, skipping this leaves the docker CLI unable to find
+            // the context at all, let alone connect and trigger a wake.
+            try? DockerContext.ensureContext(socketPath: socketPath)
+            performFirstRunContextSetup()
             state = .sleeping
             idleProxy = IdlePowerSavingProxy(daemon: self)
             idleProxy?.start()

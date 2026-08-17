@@ -29,6 +29,16 @@ final class IdlePowerSavingProxy {
 
     func start() {
         guard listener == nil else { return }
+        // On a genuinely fresh install, power saving can be the very first
+        // thing that ever touches ~/.socktainer — socktainer itself
+        // normally creates that directory (SocketUtility.swift's
+        // restrictDirectoryToOwner) on its own first run, but here it may
+        // never have run at all yet, so bind() would fail against a
+        // nonexistent parent directory. Same 0700 permissions socktainer
+        // itself uses.
+        try? FileManager.default.createDirectory(
+            atPath: (daemon.socketPath as NSString).deletingLastPathComponent,
+            withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // A Unix domain socket bind() fails with "Address already in use"
         // against a stale file left by any previous listener at this path
         // (this app's last run, or a pre-power-saving socktainer that bound

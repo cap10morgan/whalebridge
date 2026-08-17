@@ -87,6 +87,14 @@ exercises either install path and the packaged app together; the
 Stops short of `docker run` for the same nested-virtualization reason
 described below.
 
+Both of those test the latest *published release* — to test the current
+working tree instead (including uncommitted changes), run
+`make vm-smoke-test-local`. There's no Homebrew equivalent to a formula's
+`head` build for this: casks only ever install pre-built artifacts, never
+build from source, so this builds `Whalebridge.app` locally (`make bundle`)
+and shares it into the VM instead of downloading anything. Run all three
+together with `make vm-smoke-test METHODS="cask zip local"`.
+
 `make vm-golden-image` builds a local base image with a one-time fix baked
 in: on macOS Tahoe 26.4+, a stock Cirrus VM clone can intermittently boot
 into the SetupAssistant/MiniBuddy "Welcome to macOS Tahoe" screen instead of

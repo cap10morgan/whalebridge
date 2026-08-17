@@ -1,16 +1,17 @@
 #!/bin/bash
-# Smoke-tests both documented ways to install Whalebridge end to end in a
-# throwaway macOS VM: the Homebrew cask (cap10morgan/brew/whalebridge) and
-# the manual zip download from the GitHub releases page (README's
-# "Installation" section). Each gets its own VM, installs the way a real
-# user would (including clearing Gatekeeper's unnotarized-app block),
-# launches the actual menu-bar app, and drives the Docker API it exposes
-# through the real "whalebridge" docker context.
+# Smoke-tests ways to install Whalebridge end to end in a throwaway macOS VM:
+# the Homebrew cask (cap10morgan/brew/whalebridge), the manual zip download
+# from the GitHub releases page (README's "Installation" section), and
+# optionally a "local" method that builds and installs the current working
+# tree instead of a published release — see METHODS below. Each gets its own
+# VM, installs the way a real user would (including clearing Gatekeeper's
+# unnotarized-app block), launches the actual menu-bar app, and drives the
+# Docker API it exposes through the real "whalebridge" docker context.
 #
 # This complements — doesn't replace — the `integration` job in
 # .github/workflows/ci.yml, which tests the daemon/API contract directly
-# (raw socktainer binary, hand-wired socket symlink) but never touches
-# either install path, Gatekeeper, or the real app.
+# (raw socktainer binary, hand-wired socket symlink) but never touches any
+# install path, Gatekeeper, or the real app.
 #
 # Requires tart (`brew install cirruslabs/cli/tart`) and, once, running
 # `make vm-golden-image` — see scripts/vm-build-golden-image.sh for why: a
@@ -27,6 +28,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BASE_IMAGE="${BASE_IMAGE:-whalebridge-tahoe-golden}"
 CASK="${CASK:-cap10morgan/brew/whalebridge}"
+# "cask" and "zip" test the latest published release; "local" builds and
+# tests the current working tree instead (including uncommitted changes) —
+# there's no Homebrew equivalent to a formula's `head` build here, since
+# casks only ever install pre-built artifacts, never build from source.
+METHODS="${METHODS:-cask zip}"
 REQUIRED_CONTAINER_VERSION="${REQUIRED_CONTAINER_VERSION:-$(sed -n 's|.*apple/container\.git", exact: "\([0-9.]*\)".*|\1|p' "$ROOT/vendor/socktainer/Package.swift" | head -1)}"
 [[ -n "$REQUIRED_CONTAINER_VERSION" ]] || { echo "could not determine apple/container version from vendor/socktainer/Package.swift" >&2; exit 1; }
 
@@ -36,19 +42,31 @@ if [[ "$BASE_IMAGE" == "whalebridge-tahoe-golden" ]] && ! tart list --quiet 2>/d
     exit 1
 fi
 
-# Resolved on the host (unauthenticated GitHub API, no `gh` dependency) since
-# the zip asset name embeds the version and there's no stable-name alias for
-# it the way there is for appcast.xml.
-ZIP_URL="${ZIP_URL:-$(curl -fsSL https://api.github.com/repos/cap10morgan/whalebridge/releases/latest \
-    | grep -o '"browser_download_url": *"[^"]*\.zip"' | sed 's/.*"\(https[^"]*\)"/\1/')}"
-[[ -n "$ZIP_URL" ]] || { echo "could not resolve the latest release zip URL" >&2; exit 1; }
+if [[ " $METHODS " == *" cask "* || " $METHODS " == *" zip "* ]]; then
+    # Resolved on the host (unauthenticated GitHub API, no `gh` dependency)
+    # since the zip asset name embeds the version and there's no stable-name
+    # alias for it the way there is for appcast.xml.
+    ZIP_URL="${ZIP_URL:-$(curl -fsSL https://api.github.com/repos/cap10morgan/whalebridge/releases/latest \
+        | grep -o '"browser_download_url": *"[^"]*\.zip"' | sed 's/.*"\(https[^"]*\)"/\1/')}"
+    [[ -n "$ZIP_URL" ]] || { echo "could not resolve the latest release zip URL" >&2; exit 1; }
+fi
+if [[ " $METHODS " == *" local "* ]]; then
+    echo "==> Building the current working tree (make bundle)"
+    make -C "$ROOT" bundle
+    # A plain `ditto`/`cp -R` of the .app through tart's virtiofs directory
+    # share fails with "Too many levels of symbolic links" on Sparkle.
+    # framework's Versions-symlink structure — zip it first instead (same as
+    # a real release asset) so the guest extracts it onto its own native
+    # filesystem, the same path the "zip" method below already relies on.
+    ditto -c -k --keepParent "$ROOT/build/Whalebridge.app" "$ROOT/build/Whalebridge-local.zip"
+fi
 
 # One full install-through-Docker-API run in its own throwaway VM. Run in a
 # subshell (see the loop below) so its `trap cleanup EXIT` — and therefore
 # the VM teardown — is scoped to that subshell instead of the whole script,
 # letting both install methods run even if one fails.
 run_smoke_test() {
-    local method="$1" # "cask" or "zip"
+    local method="$1" # "cask", "zip", or "local"
     local tag="[$method]"
     # Not `local`: the cleanup() trap below is a plain function, and its
     # EXIT trap fires after run_smoke_test has already returned (once the
@@ -59,10 +77,9 @@ run_smoke_test() {
     # A plain nonzero exit from `tart exec` isn't the only failure signal to
     # trust: when the guest agent's control socket is unreachable, observed
     # in practice, `tart exec` can print "Failed to connect to the VM using
-    # its control socket" and still exit 0 — silently turning every later
-    # step of this function into a no-op that still reports success. Capture
-    # output and treat that message as failure regardless of exit code.
-    vm() {
+    # its control socket" and still exit 0. Capture output and treat that
+    # message as failure regardless of exit code.
+    vm_try() {
         local out status
         out="$(tart exec "$VM_NAME" bash -c "$1" 2>&1)"
         status=$?
@@ -72,11 +89,25 @@ run_smoke_test() {
         fi
     }
 
+    # macOS's /bin/bash is stuck at 3.2 (GPLv3), whose `errexit` doesn't
+    # reliably propagate a failing function's return status back out through
+    # an explicit `(...)` subshell — confirmed directly: even a bare `false`
+    # inside a function called via `( fn )` fails to trigger `set -e` on
+    # this bash, though it does on 4.x+. Every real call site below uses
+    # this exiting wrapper instead of vm_try's plain `return 1`, since `exit`
+    # unconditionally tears down the current shell (subshell included) and
+    # fires its EXIT trap regardless of errexit semantics — the same
+    # mechanism the "guest agent never ready" check already relied on.
+    # vm_try itself stays available for cleanup()'s log dump below, which is
+    # already mid-failure-handling and shouldn't let a log-dump problem mask
+    # the original error.
+    vm() { vm_try "$1" || exit 1; }
+
     cleanup() {
         local status=$?
         if [[ "$status" -ne 0 ]]; then
             echo "--- daemon.log ($method, failure) ---" >&2
-            vm 'cat "$HOME/Library/Logs/Whalebridge/daemon.log"' >&2 2>&1 || true
+            vm_try 'cat "$HOME/Library/Logs/Whalebridge/daemon.log"' >&2 2>&1 || true
         fi
         tart stop "$VM_NAME" >/dev/null 2>&1 || true
         tart delete "$VM_NAME" >/dev/null 2>&1 || true
@@ -88,7 +119,12 @@ run_smoke_test() {
     tart clone "$BASE_IMAGE" "$VM_NAME"
 
     echo "==> $tag Booting $VM_NAME"
-    tart run "$VM_NAME" --no-graphics &
+    local run_args=(--no-graphics)
+    # Shares build/ read-only so the "local" method can copy the just-built
+    # Whalebridge.app in — mounted under "/Volumes/My Shared Files/build" on
+    # the guest.
+    [[ "$method" == "local" ]] && run_args+=(--dir="build:$ROOT/build:ro")
+    tart run "$VM_NAME" "${run_args[@]}" &
     # The "agent" resolver waits for the Tart Guest Agent, not just DHCP, so
     # it doubles as the readiness check `tart exec` below depends on. A
     # single RPC attempt occasionally times out before the agent's vsock
@@ -121,6 +157,14 @@ run_smoke_test() {
           ditto -x -k /tmp/whalebridge.zip /tmp/wb-extract &&
           mv /tmp/wb-extract/Whalebridge.app /Applications/Whalebridge.app
         "
+        ;;
+    local)
+        echo "==> $tag Installing the locally-built Whalebridge.app"
+        vm '
+          rm -rf /tmp/wb-extract && mkdir /tmp/wb-extract &&
+          ditto -x -k "/Volumes/My Shared Files/build/Whalebridge-local.zip" /tmp/wb-extract &&
+          mv /tmp/wb-extract/Whalebridge.app /Applications/Whalebridge.app
+        '
         ;;
     esac
 
@@ -190,7 +234,7 @@ run_smoke_test() {
 }
 
 overall=0
-for method in cask zip; do
+for method in $METHODS; do
     echo "########## Testing the $method install path ##########"
     if ! (run_smoke_test "$method"); then
         echo "!!! $method install path FAILED" >&2
