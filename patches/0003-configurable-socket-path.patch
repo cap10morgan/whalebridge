@@ -1,0 +1,21 @@
+diff --git a/Sources/socktainer/Utilities/SocketUtility.swift b/Sources/socktainer/Utilities/SocketUtility.swift
+index 7854bf7..e31e53f 100644
+--- a/Sources/socktainer/Utilities/SocketUtility.swift
++++ b/Sources/socktainer/Utilities/SocketUtility.swift
+@@ -10,7 +10,15 @@ func socketDirectory(homeDirectory: String) -> String {
+ }
+ 
+ func containerSocketPath(homeDirectory: String) -> String {
+-    "\(socketDirectory(homeDirectory: homeDirectory))/container.sock"
++    // Distributions that front this socket with their own supervisor (e.g. an
++    // idle-activation proxy that owns the public path and hands off to a
++    // freshly-started socktainer bound elsewhere) need it listening somewhere
++    // other than the fixed default — SOCKTAINER_SOCKET_PATH overrides it.
++    // Unset in normal use, where the default is unchanged.
++    if let override = ProcessInfo.processInfo.environment["SOCKTAINER_SOCKET_PATH"] {
++        return override
++    }
++    return "\(socketDirectory(homeDirectory: homeDirectory))/container.sock"
+ }
+ 
+ public func prepareUnixSocket(for app: Application, homeDirectory: String? = nil) throws {

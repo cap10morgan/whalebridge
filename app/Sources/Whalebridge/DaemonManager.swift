@@ -13,6 +13,14 @@ final class DaemonManager: ObservableObject {
         case running
         case waitingForRuntime
         case failed(String)
+        /// Both daemons stopped after being idle (power saving). Only reachable
+        /// when AppSettings.powerSavingEnabled; the idle-activation proxy wakes
+        /// this on the next Docker API connection.
+        case sleeping
+        /// Power saving is waking the daemons in response to a real connection —
+        /// same underlying startup as .starting, distinguished only so the menu
+        /// bar can say why it's starting up unprompted.
+        case waking
 
         var label: String {
             switch self {
@@ -21,6 +29,8 @@ final class DaemonManager: ObservableObject {
             case .running: "running"
             case .waitingForRuntime: "waiting for Apple container runtime"
             case .failed(let reason): "failed — \(reason)"
+            case .sleeping: "sleeping (idle)"
+            case .waking: "waking…"
             }
         }
     }
@@ -76,8 +86,23 @@ final class DaemonManager: ObservableObject {
             ?? "1.1.0"
     }
 
+    /// Public path Docker clients connect to — unchanged whether or not power
+    /// saving is active; DockerContext/dockerHost always point here.
     let socketPath = NSHomeDirectory() + "/.socktainer/container.sock"
     var dockerHost: String { "unix://\(socketPath)" }
+
+    /// Path socktainer itself actually binds — same as `socketPath` unless
+    /// power saving is enabled, in which case IdlePowerSavingProxy owns the
+    /// public path permanently and hands off to socktainer bound here
+    /// instead (patches/0003-configurable-socket-path.patch). Whalebridge's
+    /// own internal Docker API traffic (ContainerStore's polling and menu
+    /// actions) also targets this path rather than `socketPath` directly —
+    /// going through the proxy would count as activity and mean the daemons
+    /// could never idle back down once woken, defeating the point.
+    var daemonSocketPath: String {
+        AppSettings.shared.powerSavingEnabled
+            ? NSHomeDirectory() + "/.socktainer/container.internal.sock" : socketPath
+    }
 
     var logFileURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -91,7 +116,12 @@ final class DaemonManager: ObservableObject {
     }
     private var process: Process?
     private var stopRequested = false
+    /// Set only by stopForIdle(), read (and reset) by daemonDidExit(status:) to
+    /// tell an idle-triggered stop apart from a user-requested one, so the exit
+    /// handler lands on the right terminal state instead of always .stopped.
+    private var idleStopRequested = false
     private var pollTask: Task<Void, Never>?
+    private var idleProxy: IdlePowerSavingProxy?
 
     /// Bundled binary in Contents/MacOS, or WHALEBRIDGE_DAEMON when run via `make dev`.
     private var daemonURL: URL? {
@@ -109,7 +139,16 @@ final class DaemonManager: ObservableObject {
     func bootstrap() async {
         await refreshRuntimeStatus()
         await refreshApiserverStatus()
-        await start()
+        if AppSettings.shared.powerSavingEnabled {
+            // Don't eagerly start both daemons on every login just to
+            // potentially sit idle — the proxy is the only thing that ever
+            // wakes them, on the first real Docker API connection.
+            state = .sleeping
+            idleProxy = IdlePowerSavingProxy(daemon: self)
+            idleProxy?.start()
+        } else {
+            await start()
+        }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
@@ -149,7 +188,7 @@ final class DaemonManager: ObservableObject {
     }
 
     func start() async {
-        guard state != .running, state != .starting else { return }
+        guard state != .running, state != .starting, state != .waking else { return }
         guard let daemonURL, FileManager.default.isExecutableFile(atPath: daemonURL.path) else {
             state = .failed("Whalebridge binary not found")
             return
@@ -159,7 +198,9 @@ final class DaemonManager: ObservableObject {
             state = .waitingForRuntime
             return
         }
-        state = .starting
+        // Distinguish a power-saving wake from an ordinary start only for
+        // display — the rest of this method is identical either way.
+        state = (state == .sleeping) ? .waking : .starting
         stopRequested = false
         await reapOrphanedDaemon()
 
@@ -185,15 +226,22 @@ final class DaemonManager: ObservableObject {
         let daemon = Process()
         daemon.executableURL = daemonURL
         daemon.arguments = ["--no-docker-context"]
-        // Brand `docker version` output (patches/0001-brandable-platform-name.patch).
-        daemon.environment = ProcessInfo.processInfo.environment.merging([
+        var env = [
+            // Brand `docker version` output (patches/0001-brandable-platform-name.patch).
             "SOCKTAINER_PLATFORM_NAME": "Whalebridge",
             "SOCKTAINER_PLATFORM_VERSION": AppVersion.current,
             // Default memory limit for containers that don't request their own
             // (patches/0002-container-lifecycle-and-buildx-fixes.patch),
             // configurable in Settings.
             "SOCKTAINER_DEFAULT_MEMORY_PERCENT": "\(AppSettings.shared.defaultContainerMemoryPercent)",
-        ]) { _, new in new }
+        ]
+        // Only set when power saving relocates the daemon off the public path
+        // (patches/0003-configurable-socket-path.patch) — unset otherwise, so
+        // socktainer binds its normal default with power saving off.
+        if daemonSocketPath != socketPath {
+            env["SOCKTAINER_SOCKET_PATH"] = daemonSocketPath
+        }
+        daemon.environment = ProcessInfo.processInfo.environment.merging(env) { _, new in new }
         if let log = makeLogHandle() {
             daemon.standardOutput = log
             daemon.standardError = log
@@ -215,8 +263,9 @@ final class DaemonManager: ObservableObject {
         }
 
         await waitForSocket()
-        // stop() or an early daemon exit may have moved us on while we waited.
-        guard state == .starting else { return }
+        // stop()/stopForIdle() or an early daemon exit may have moved us on
+        // while we waited.
+        guard state == .starting || state == .waking else { return }
         state = .running
         try? DockerContext.ensureContext(socketPath: socketPath)
         performFirstRunContextSetup()
@@ -226,16 +275,17 @@ final class DaemonManager: ObservableObject {
     /// "answering", not "spawned" — otherwise the first docker command races it.
     private func waitForSocket() async {
         let deadline = Date().addingTimeInterval(20)
-        while Date() < deadline && state == .starting {
+        while Date() < deadline && (state == .starting || state == .waking) {
             if socketIsAccepting() { return }
             try? await Task.sleep(for: .milliseconds(100))
         }
     }
 
     /// Connect rather than stat: a stale socket file from a crashed daemon
-    /// exists on disk but refuses connections.
+    /// exists on disk but refuses connections. Targets daemonSocketPath, not
+    /// the public socketPath — the two differ under power saving.
     private func socketIsAccepting() -> Bool {
-        guard let fd = try? UnixHTTP.connect(socketPath, timeoutSeconds: 1) else { return false }
+        guard let fd = try? UnixHTTP.connect(daemonSocketPath, timeoutSeconds: 1) else { return false }
         close(fd)
         return true
     }
@@ -293,10 +343,35 @@ final class DaemonManager: ObservableObject {
 
     func stop() {
         stopRequested = true
+        idleStopRequested = false
         process?.terminate()
         process = nil
         try? FileManager.default.removeItem(at: pidFileURL)
         state = .stopped
+    }
+
+    /// Power saving's idle timeout: stops socktainer and the apiserver, same
+    /// as stop(), but lands on .sleeping instead of .stopped so the proxy
+    /// (the only thing that calls this) knows to wake them on the next
+    /// connection instead of leaving Whalebridge looking stopped/broken.
+    func stopForIdle() async {
+        guard state == .running else { return }
+        stopRequested = true
+        idleStopRequested = true
+        process?.terminate()
+        process = nil
+        try? FileManager.default.removeItem(at: pidFileURL)
+        state = .sleeping
+        await stopApiserver()
+    }
+
+    /// Power saving's wake path: identical startup to start(), just callable
+    /// from .sleeping (start()'s guard clause otherwise only fires from a
+    /// stopped/failed/waiting state) — called by the proxy on the first
+    /// connection after an idle stop.
+    func wakeFromIdle() async {
+        guard state == .sleeping else { return }
+        await start()
     }
 
     func startApiserver() async {
@@ -312,14 +387,19 @@ final class DaemonManager: ObservableObject {
 
     /// `container system stop` on an already-stopped service is a harmless
     /// no-op, so this is safe to call whenever the running apiserver's
-    /// version is in doubt.
-    private func restartApiserver() async {
+    /// version is in doubt, or when idling it down for power saving.
+    private func stopApiserver() async {
         apiserverTransitioning = true
         defer { apiserverTransitioning = false }
         let result = await Shell.run(containerCLI, ["system", "stop"])
         if result.status != 0 {
             NSLog("container system stop exited \(result.status): \(result.output)")
         }
+        await refreshApiserverStatus()
+    }
+
+    private func restartApiserver() async {
+        await stopApiserver()
         await startApiserver()
     }
 
@@ -463,7 +543,12 @@ final class DaemonManager: ObservableObject {
 
     private func daemonDidExit(status: Int32) {
         process = nil
-        state = stopRequested ? .stopped : .failed("Whalebridge exited (code \(status)) — see log")
+        if stopRequested {
+            state = idleStopRequested ? .sleeping : .stopped
+        } else {
+            state = .failed("Whalebridge exited (code \(status)) — see log")
+        }
+        idleStopRequested = false
     }
 
     private func refreshContextStatus() {

@@ -66,6 +66,8 @@ struct MenuView: View {
 
         if daemon.state == .running {
             Button("Stop Whalebridge") { daemon.stop() }
+        } else if daemon.state == .sleeping {
+            Button("Wake Now") { Task { await daemon.wakeFromIdle() } }
         } else if !daemon.runtimeStatus.needsInstall {
             Button("Start Whalebridge") { Task { await daemon.start() } }
         }
