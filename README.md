@@ -67,6 +67,37 @@ make run      # bundle + launch
 make dev      # run the app unbundled via swift run (uses the vendor daemon build)
 ```
 
+## VM smoke test
+
+```sh
+brew install cirruslabs/cli/tart
+make vm-golden-image   # one-time; see scripts/vm-build-golden-image.sh
+make vm-smoke-test
+```
+
+Boots a throwaway macOS VM ([tart](https://tart.run)) for each of the two
+documented install paths — the
+[`cap10morgan/brew/whalebridge`](https://github.com/cap10morgan/homebrew-brew)
+cask, and the manual zip download from the Releases page — installs exactly
+the way a real user would in each, including clearing Gatekeeper's
+unnotarized-app block, launches the real app, and drives it over the Docker
+API through the real `whalebridge` docker context. It's the only check that
+exercises either install path and the packaged app together; the
+`integration` CI job below tests the daemon/API contract directly instead.
+Stops short of `docker run` for the same nested-virtualization reason
+described below.
+
+`make vm-golden-image` builds a local base image with a one-time fix baked
+in: on macOS Tahoe 26.4+, a stock Cirrus VM clone can intermittently boot
+into the SetupAssistant/MiniBuddy "Welcome to macOS Tahoe" screen instead of
+a normal session — an Apple behavior change, not a tart bug (see
+[openai/tart#1222](https://github.com/openai/tart/issues/1222)). That screen
+blocks the guest agent along with everything else while the kernel/network
+are already up, so it can hang for minutes with no way to recover — the
+shell access needed to dismiss it is exactly what the screen is blocking.
+`vm-smoke-test` clones from this pre-fixed image instead of Cirrus's stock
+one to avoid it.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on every push and pull request:
