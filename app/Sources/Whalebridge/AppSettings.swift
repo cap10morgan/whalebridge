@@ -25,8 +25,27 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// Stop both socktainer and the apple/container apiserver after
+    /// idleTimeoutMinutes of inactivity, transparently waking them on the
+    /// next Docker API connection (IdlePowerSavingProxy). Takes effect the
+    /// next time Whalebridge starts, same as defaultContainerMemoryPercent.
+    @Published var powerSavingEnabled: Bool = false {
+        didSet {
+            guard powerSavingEnabled != oldValue else { return }
+            UserDefaults.standard.set(powerSavingEnabled, forKey: powerSavingEnabledKey)
+        }
+    }
+    @Published var idleTimeoutMinutes: Double = 30 {
+        didSet {
+            guard idleTimeoutMinutes != oldValue else { return }
+            UserDefaults.standard.set(idleTimeoutMinutes, forKey: idleTimeoutMinutesKey)
+        }
+    }
+
     private let firstRunLoginItemKey = "didFirstRunLoginItem"
     private let defaultContainerMemoryPercentKey = "defaultContainerMemoryPercent"
+    private let powerSavingEnabledKey = "powerSavingEnabled"
+    private let idleTimeoutMinutesKey = "idleTimeoutMinutes"
 
     /// SMAppService only works on a real bundle, so `make dev` runs opt out.
     private var canManageLoginItem: Bool {
@@ -36,6 +55,28 @@ final class AppSettings: ObservableObject {
     private init() {
         if let stored = UserDefaults.standard.object(forKey: defaultContainerMemoryPercentKey) as? Double {
             defaultContainerMemoryPercent = stored
+        }
+        if let stored = UserDefaults.standard.object(forKey: idleTimeoutMinutesKey) as? Double {
+            idleTimeoutMinutes = stored
+        }
+        if let stored = UserDefaults.standard.object(forKey: powerSavingEnabledKey) as? Bool {
+            powerSavingEnabled = stored
+        } else if !UserDefaults.standard.bool(forKey: firstRunLoginItemKey) {
+            // This key not being set doesn't by itself mean a new install —
+            // it's a new *setting*, so every existing install upgrading to
+            // it would look identical to a fresh one. firstRunLoginItemKey
+            // has been set on every launch since Whalebridge's first
+            // version, so its absence is the actual "never run before"
+            // signal; enable by default only then — an existing install
+            // (the else branch) explicitly opts out instead.
+            powerSavingEnabled = true
+            UserDefaults.standard.set(true, forKey: powerSavingEnabledKey)
+        } else {
+            // Existing install upgrading to a version with this setting —
+            // never silently turn this on behind someone already using
+            // Whalebridge.
+            powerSavingEnabled = false
+            UserDefaults.standard.set(false, forKey: powerSavingEnabledKey)
         }
 
         guard canManageLoginItem else { return }
@@ -88,6 +129,13 @@ struct SettingsView: View {
             settings.defaultContainerMemoryPercent, totalGB, limitGB)
     }
 
+    private var idleTimeoutCaption: String {
+        String(
+            format: "Stop both daemons after %.0f minutes idle, and transparently restart them on the next"
+                + " docker command. Applies the next time Whalebridge starts.",
+            settings.idleTimeoutMinutes)
+    }
+
     var body: some View {
         Form {
             Section {
@@ -116,6 +164,20 @@ struct SettingsView: View {
                     Text(memoryLimitCaption)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                Toggle("Power saving", isOn: $settings.powerSavingEnabled)
+                if settings.powerSavingEnabled {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Slider(value: $settings.idleTimeoutMinutes, in: 5...120, step: 5) {
+                            Text("Idle timeout")
+                        }
+                        Text(idleTimeoutCaption)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 

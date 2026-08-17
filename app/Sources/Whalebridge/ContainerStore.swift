@@ -156,7 +156,7 @@ final class ContainerStore: ObservableObject {
         }
         guard
             let response = try? await UnixHTTP.request(
-                "GET", "/containers/json?all=1", socket: daemon.socketPath),
+                "GET", "/containers/json?all=1", socket: daemon.daemonSocketPath),
             response.status == 200,
             let all = try? JSONDecoder().decode([ContainerSummary].self, from: response.body)
         else { return }  // transient failure — keep the last good list
@@ -188,7 +188,7 @@ final class ContainerStore: ObservableObject {
     }
 
     private func perform(_ method: String, _ path: String) async {
-        _ = try? await UnixHTTP.request(method, path, socket: DaemonManager.shared.socketPath)
+        _ = try? await UnixHTTP.request(method, path, socket: DaemonManager.shared.daemonSocketPath)
         await refresh()
     }
 }
