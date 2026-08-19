@@ -23,9 +23,15 @@ and wiring up a Docker context so `docker ps` just works.
 
 ## Installation
 
-Download the latest release from the [Releases page](https://github.com/cap10morgan/whalebridge/releases/latest), unzip it, and move **Whalebridge.app** into `/Applications`.
+With Homebrew:
 
-Whalebridge isn't notarized — that requires enrolling in the paid Apple
+```sh
+brew install --cask cap10morgan/brew/whalebridge
+```
+
+Or manually: download the latest release from the [Releases page](https://github.com/cap10morgan/whalebridge/releases/latest), unzip it, and move **Whalebridge.app** into `/Applications`.
+
+Either way, Whalebridge isn't notarized — that requires enrolling in the paid Apple
 Developer Program, which this free, hobby project doesn't do — so Gatekeeper
 blocks a downloaded copy's first launch as being from an "unidentified
 developer." To get past that one-time block:
@@ -38,7 +44,10 @@ developer." To get past that one-time block:
   quarantine flag directly, skipping the Gatekeeper prompt entirely.
 
 After that first launch, macOS remembers your choice — future updates (which
-install automatically via Sparkle) won't prompt again.
+install automatically via Sparkle) won't prompt again. Sparkle handles updates
+for the Homebrew install as well: the cask declares `auto_updates`, so `brew
+upgrade` leaves Whalebridge alone rather than reinstalling the cask's recorded
+version over a newer one the app fetched itself.
 
 If you'd rather skip the Gatekeeper dance, [sponsoring the
 project](https://github.com/sponsors/cap10morgan) goes toward enrolling in
