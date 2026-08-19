@@ -4,6 +4,8 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-19
+
 ### Added
 - Power saving: Whalebridge can now stop both its own daemon and Apple's container services after a period of inactivity, transparently restarting them on the next Docker API request instead of requiring a manual restart. Enabled by default for new installs; existing installs can opt in from Settings, where the idle timeout (default 30 minutes) is also configurable. The menu bar icon gets a moon badge while sleeping.
 
@@ -77,7 +79,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/cap10morgan/whalebridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cap10morgan/whalebridge/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/cap10morgan/whalebridge/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/cap10morgan/whalebridge/compare/v0.1.5...v0.1.6
