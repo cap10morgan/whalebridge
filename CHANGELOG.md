@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Sparkle's "new version available" dialog now shows that release's changelog section as its release notes, instead of an empty notes pane.
+
 ## [0.3.0] - 2026-08-19
 
 ### Added
