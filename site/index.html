@@ -122,6 +122,21 @@
     font-size: 0.9em;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
+  pre.cmd {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 10px 0;
+    /* Long enough to overflow on a narrow phone; scroll the block rather
+       than letting it widen the page. */
+    overflow-x: auto;
+  }
+  pre.cmd code {
+    color: var(--fg);
+    font-size: 0.88rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
   /* flex-wrap is deliberately off here (and on .flow-row): at in-between
      widths, letting flex wrap on its own splits docker CLI onto its own
      line above the group box well before the intentional column layout
@@ -292,7 +307,13 @@
   <section>
     <h2>Getting started</h2>
     <ol>
-      <li>Download the latest release and move <strong>Whalebridge.app</strong> into <code>/Applications</code>.</li>
+      <li>
+        Install it with Homebrew:
+        <pre class="cmd"><code>brew install --cask cap10morgan/brew/whalebridge</code></pre>
+        Or download the
+        <a href="https://github.com/cap10morgan/whalebridge/releases/latest">latest release</a>
+        and move <strong>Whalebridge.app</strong> into <code>/Applications</code>.
+      </li>
       <li>
         The first time you open it, macOS blocks it as being from an
         "unidentified developer" — Whalebridge isn't notarized, since that
@@ -310,7 +331,10 @@
     </ol>
     <p>
       Updates ship automatically via <a href="https://sparkle-project.org">Sparkle</a> —
-      no need to redownload for future releases.
+      no need to redownload for future releases. That holds for the Homebrew
+      install too: the cask declares <code>auto_updates</code>, so
+      <code>brew upgrade</code> leaves Whalebridge to update itself instead of
+      reinstalling over a newer version.
     </p>
     <p>
       If you'd rather skip the Gatekeeper dance, <a href="https://github.com/sponsors/cap10morgan">sponsoring
