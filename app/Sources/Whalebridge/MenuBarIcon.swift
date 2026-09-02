@@ -89,7 +89,9 @@ enum MenuBarIconState: Equatable {
     static func forState(
         daemon: DaemonManager.State, apiserverRunning: Bool, apiserverTransitioning: Bool
     ) -> Self {
-        if apiserverTransitioning || daemon == .starting || daemon == .waking { return .animating }
+        if apiserverTransitioning || daemon == .starting || daemon == .waking
+            || daemon == .restarting
+        { return .animating }
         if daemon == .running && apiserverRunning { return .active }
         if daemon == .sleeping { return .sleeping }
         return .inactive

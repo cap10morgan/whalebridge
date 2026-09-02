@@ -6,6 +6,10 @@ All notable changes to Whalebridge are documented in this file.
 
 ### Added
 - Sparkle's "new version available" dialog now shows that release's changelog section as its release notes, instead of an empty notes pane.
+- Whalebridge now relaunches its daemon automatically when it exits unexpectedly, instead of parking on "failed" until someone noticed the menu bar and restarted by hand. Retries back off (1s, 2s, 4s, 8s, 16s) and stop after five attempts so a daemon that dies on every launch settles into "failed" rather than spinning; a daemon that ran a healthy minute before dying gets a fresh retry budget. Under power saving, an incoming Docker request skips the remaining backoff and retries immediately. Apple's container services are covered too: if they stop underneath a running daemon, Whalebridge restarts them.
+
+### Fixed
+- Fixed a crash that could kill the daemon whenever two Docker API requests arrived at the same moment on a sleeping (power-saving) Whalebridge. Both connections independently decided the daemon needed waking, and because the startup path suspends at `await` — releasing the main actor between the "is it already starting?" check and the point where that decision is recorded — both went on to launch a socktainer. The two raced to bind the same Unix socket, and the loser died with `bind(...): File exists (errno: 17)`, taking the pidfile with it and orphaning the winner, which then kept the socket held while the app reported the daemon dead. Startup is now funnelled through a single task that concurrent callers await, and every teardown path waits for the old daemon to actually exit (escalating to SIGKILL) before a new one spawns, rather than assuming SIGTERM took effect immediately.
 
 ## [0.3.0] - 2026-08-19
 

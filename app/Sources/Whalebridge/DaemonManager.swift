@@ -21,6 +21,9 @@ final class DaemonManager: ObservableObject {
         /// same underlying startup as .starting, distinguished only so the menu
         /// bar can say why it's starting up unprompted.
         case waking
+        /// Recovering from an unexpected daemon exit — the automatic relaunch
+        /// is either counting down or already under way.
+        case restarting
 
         var label: String {
             switch self {
@@ -31,6 +34,7 @@ final class DaemonManager: ObservableObject {
             case .failed(let reason): "failed — \(reason)"
             case .sleeping: "sleeping (idle)"
             case .waking: "waking…"
+            case .restarting: "restarting after crash…"
             }
         }
     }
@@ -122,6 +126,12 @@ final class DaemonManager: ObservableObject {
     private var idleStopRequested = false
     private var pollTask: Task<Void, Never>?
     private var idleProxy: IdlePowerSavingProxy?
+    /// A child we've asked to exit but haven't confirmed dead yet. Held so the
+    /// next start() waits it out instead of racing it for the socket.
+    private var terminatingPID: Int32?
+    private var relaunchTask: Task<Void, Never>?
+    private var relaunchAttempts = 0
+    private var lastDaemonStart = Date.distantPast
 
     /// Bundled binary in Contents/MacOS, or WHALEBRIDGE_DAEMON when run via `make dev`.
     private var daemonURL: URL? {
@@ -164,6 +174,14 @@ final class DaemonManager: ObservableObject {
                 await self.refreshRuntimeStatus()
                 await self.refreshApiserverStatus()
                 self.refreshContextStatus()
+                // Apple's services can stop independently of socktainer (their
+                // own crash, or a `container system stop` from a shell), which
+                // leaves our daemon up but answering nothing. Relaunching on a
+                // crash has to cover both halves, not just ours.
+                if self.state == .running, !self.apiserverRunning, !self.apiserverTransitioning {
+                    NSLog("apple/container services stopped under a running daemon — restarting")
+                    await self.startApiserver()
+                }
                 // runtime appeared (user finished Installer.app) — start the daemon
                 if case .compatible = self.runtimeStatus, self.state == .waitingForRuntime {
                     await self.start()
@@ -190,13 +208,71 @@ final class DaemonManager: ObservableObject {
         else { return }
         // Guard against pid reuse: only kill if it's actually our daemon.
         let result = await Shell.run("/bin/ps", ["-p", "\(pid)", "-o", "comm="])
-        if result.output.contains("socktainer") {
-            kill(pid, SIGTERM)
+        guard result.output.contains("socktainer") else { return }
+        kill(pid, SIGTERM)
+        await waitForExit(pid: pid)
+    }
+
+    /// SIGTERM only *asks* a process to exit, and socktainer holds its socket
+    /// bound until it actually does. Starting the replacement before then is
+    /// what makes the new daemon lose the race to bind and die on EEXIST, so
+    /// every teardown path waits here before a new daemon spawns.
+    private func waitForExit(pid: Int32, timeout: TimeInterval = 5) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if kill(pid, 0) != 0 { return }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        // Wouldn't go quietly. SIGKILL can't be caught, so this always lands.
+        kill(pid, SIGKILL)
+        for _ in 0..<20 {
+            if kill(pid, 0) != 0 { return }
+            try? await Task.sleep(for: .milliseconds(100))
         }
     }
 
+    /// Concurrent callers must never each spawn a daemon. Checking `state`
+    /// can't prevent that on its own: this class is @MainActor, but the actor
+    /// is released at every `await` in the startup path, so two tasks that
+    /// both pass the guard before the first suspension point will both go on
+    /// to run a daemon. That is exactly how two socktainers end up racing to
+    /// bind the same socket — the loser dies on EEXIST and overwrites the
+    /// pidfile on its way out, orphaning the winner. Funnel every caller
+    /// through one Task so latecomers await the in-flight start instead of
+    /// beginning a second one.
+    private var startTask: Task<Void, Never>?
+
     func start() async {
+        if let startTask {
+            await startTask.value
+            return
+        }
         guard state != .running, state != .starting, state != .waking else { return }
+        // A start that didn't come from the relaunch ladder (menu Start, the
+        // runtime finally appearing, a power-saving wake) is a fresh intent —
+        // give it the whole retry budget, not the tail of an old streak.
+        if state != .restarting { relaunchAttempts = 0 }
+        // Claim the transition synchronously, before the first `await` below,
+        // so anything checking `state` while this start is suspended sees a
+        // start already under way. Telling a power-saving wake from an
+        // ordinary start is only for display — startup is identical either way.
+        state = (state == .sleeping) ? .waking : .starting
+        // A relaunch still counting down would spawn a second daemon once this
+        // one finishes. The relaunch task clears this itself immediately before
+        // calling start(), so cancelling here can never hit the very task we
+        // are being called from.
+        relaunchTask?.cancel()
+        relaunchTask = nil
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performStart()
+        }
+        startTask = task
+        await task.value
+        startTask = nil
+    }
+
+    private func performStart() async {
         guard let daemonURL, FileManager.default.isExecutableFile(atPath: daemonURL.path) else {
             state = .failed("Whalebridge binary not found")
             return
@@ -206,11 +282,13 @@ final class DaemonManager: ObservableObject {
             state = .waitingForRuntime
             return
         }
-        // Distinguish a power-saving wake from an ordinary start only for
-        // display — the rest of this method is identical either way.
-        state = (state == .sleeping) ? .waking : .starting
         stopRequested = false
         await reapOrphanedDaemon()
+        // Our own child from a stop()/stopForIdle() may still be on its way out.
+        if let pid = terminatingPID {
+            await waitForExit(pid: pid)
+            terminatingPID = nil
+        }
 
         // The apple/container pkg installer updates files on disk but doesn't
         // restart an already-running apiserver, so a service started under an
@@ -264,6 +342,7 @@ final class DaemonManager: ObservableObject {
         do {
             try daemon.run()
             process = daemon
+            lastDaemonStart = Date()
             try? "\(daemon.processIdentifier)".write(to: pidFileURL, atomically: true, encoding: .utf8)
         } catch {
             state = .failed(error.localizedDescription)
@@ -352,6 +431,10 @@ final class DaemonManager: ObservableObject {
     func stop() {
         stopRequested = true
         idleStopRequested = false
+        relaunchTask?.cancel()
+        relaunchTask = nil
+        relaunchAttempts = 0
+        terminatingPID = process?.processIdentifier
         process?.terminate()
         process = nil
         try? FileManager.default.removeItem(at: pidFileURL)
@@ -366,6 +449,9 @@ final class DaemonManager: ObservableObject {
         guard state == .running else { return }
         stopRequested = true
         idleStopRequested = true
+        relaunchTask?.cancel()
+        relaunchTask = nil
+        terminatingPID = process?.processIdentifier
         process?.terminate()
         process = nil
         try? FileManager.default.removeItem(at: pidFileURL)
@@ -551,12 +637,54 @@ final class DaemonManager: ObservableObject {
 
     private func daemonDidExit(status: Int32) {
         process = nil
-        if stopRequested {
-            state = idleStopRequested ? .sleeping : .stopped
-        } else {
-            state = .failed("Whalebridge exited (code \(status)) — see log")
-        }
+        let wasIdleStop = idleStopRequested
         idleStopRequested = false
+        if stopRequested {
+            state = wasIdleStop ? .sleeping : .stopped
+            return
+        }
+        // The app is on its way out; don't fight it by starting a new daemon.
+        guard !isTerminating else {
+            state = .stopped
+            return
+        }
+        scheduleRelaunch(afterExitCode: status)
+    }
+
+    /// How long a daemon must survive for its run to count as healthy. Past
+    /// this, the next crash starts a fresh retry budget rather than inheriting
+    /// the streak from some earlier bad patch.
+    private let healthyRunSeconds: TimeInterval = 60
+    private let maxRelaunchAttempts = 5
+
+    /// An unexpected exit used to land in .failed and sit there until someone
+    /// happened to look at the menu bar. Bring the daemon back on its own
+    /// instead, widening the delay as attempts repeat so a daemon that dies on
+    /// every launch (missing runtime, corrupt install) settles into .failed
+    /// instead of becoming a spawn loop.
+    private func scheduleRelaunch(afterExitCode status: Int32) {
+        if Date().timeIntervalSince(lastDaemonStart) >= healthyRunSeconds {
+            relaunchAttempts = 0
+        }
+        guard relaunchAttempts < maxRelaunchAttempts else {
+            NSLog("socktainer exited (code \(status)); giving up after \(relaunchAttempts) relaunches")
+            state = .failed("Whalebridge exited (code \(status)) — see log")
+            return
+        }
+        relaunchAttempts += 1
+        let attempt = relaunchAttempts
+        let delay = min(pow(2, Double(attempt - 1)), 30)
+        state = .restarting
+        NSLog("socktainer exited (code \(status)) — relaunch \(attempt)/\(maxRelaunchAttempts) in \(delay)s")
+        relaunchTask?.cancel()
+        relaunchTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            // Cleared before start() so start()'s own cancel can't target the
+            // task that is running this very closure.
+            self.relaunchTask = nil
+            await self.start()
+        }
     }
 
     private func refreshContextStatus() {

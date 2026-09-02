@@ -45,6 +45,15 @@ import Testing
                 == .animating)
     }
 
+    /// A crash relaunch is a startup like any other as far as the icon is
+    /// concerned — it should spin, not sit on the stopped glyph.
+    @Test func crashRelaunchAnimates() {
+        #expect(
+            MenuBarIconState.forState(
+                daemon: .restarting, apiserverRunning: false, apiserverTransitioning: false)
+                == .animating)
+    }
+
     @Test func apiserverStartOrRestartAnimatesRegardlessOfDaemonState() {
         for state: DaemonManager.State in [.stopped, .starting, .running, .waitingForRuntime] {
             #expect(
