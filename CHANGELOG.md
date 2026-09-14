@@ -4,6 +4,8 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-14
+
 ### Added
 - Sparkle's "new version available" dialog now shows that release's changelog section as its release notes, instead of an empty notes pane.
 - Whalebridge now relaunches its daemon automatically when it exits unexpectedly, instead of parking on "failed" until someone noticed the menu bar and restarted by hand. Retries back off (1s, 2s, 4s, 8s, 16s) and stop after five attempts so a daemon that dies on every launch settles into "failed" rather than spinning; a daemon that ran a healthy minute before dying gets a fresh retry budget. Under power saving, an incoming Docker request skips the remaining backoff and retries immediately. Apple's container services are covered too: if they stop underneath a running daemon, Whalebridge restarts them.
@@ -86,7 +88,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/cap10morgan/whalebridge/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/cap10morgan/whalebridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cap10morgan/whalebridge/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/cap10morgan/whalebridge/compare/v0.1.6...v0.1.7
