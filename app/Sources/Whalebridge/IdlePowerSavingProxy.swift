@@ -91,8 +91,21 @@ final class IdlePowerSavingProxy {
         activeConnections += 1
         client.start(queue: .main)
 
-        if daemon.state == .sleeping {
+        switch daemon.state {
+        case .sleeping:
             await daemon.wakeFromIdle()
+        case .starting, .waking:
+            // A wake this connection didn't trigger is already in flight —
+            // start() coalesces onto it, so wait for the daemon to come up
+            // rather than dropping a client that arrived a few ms too late.
+            await daemon.start()
+        case .restarting:
+            // A crash relaunch is counting down and a real client is waiting on
+            // it — try now rather than making them sit out the backoff. start()
+            // keeps the retry budget, so this can't turn into a spawn loop.
+            await daemon.start()
+        default:
+            break
         }
         // Nothing to proxy to if the wake attempt didn't land on .running
         // (e.g. the runtime isn't installed, or the daemon binary is
