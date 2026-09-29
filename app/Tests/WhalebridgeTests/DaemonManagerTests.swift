@@ -39,3 +39,28 @@ import Testing
         #expect(DaemonManager.bestPatchTag(from: tags, majorMinor: "1.2") == "1.2.10")
     }
 }
+
+/// `defaultKernelPath` finds where apple/container keeps its default kernel
+/// from `container system status` output, since there's no command that
+/// reports the kernel itself.
+@Suite struct DefaultKernelPathTests {
+    @Test func readsAppRootFromStatusOutput() {
+        let output = """
+            FIELD               VALUE
+            status              running
+            paths.appRoot       /Users/me/Library/Application Support/com.apple.container/
+            paths.installRoot   /usr/local/
+            """
+        #expect(
+            DaemonManager.defaultKernelPath(statusOutput: output, architecture: "arm64")
+                == "/Users/me/Library/Application Support/com.apple.container/kernels/default.kernel-arm64")
+    }
+
+    @Test func missingAppRootReturnsNil() {
+        #expect(DaemonManager.defaultKernelPath(statusOutput: "status  running", architecture: "arm64") == nil)
+    }
+
+    @Test func emptyAppRootReturnsNil() {
+        #expect(DaemonManager.defaultKernelPath(statusOutput: "paths.appRoot       ", architecture: "arm64") == nil)
+    }
+}
