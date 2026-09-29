@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Updated the bundled socktainer daemon to v1.4.0, which pins Apple's container runtime to 1.4.1 (up from 1.2.0) — Whalebridge offers to install it on systems running an older version, as with prior runtime bumps. apple/container 1.2.0 breaks outbound networking from containers on macOS 27. Three of our local patches were dropped because socktainer now handles the same cases upstream: `--privileged` granting all capabilities (socktainer#364), `docker cp` and archive reads against a never-started container (socktainer#372, #379, #395 — served from the image snapshot and staged until start, replacing our experimental bootstrap-on-demand), and the missing-runtime-state error messages that went with it. The concurrent-create 409 mapping and the Settings-driven default memory limit remain as local patches; the latter now layers onto socktainer's new support for Apple Container's `[container]` defaults, taking precedence over them when set.
+
 ## [0.3.1] - 2026-09-14
 
 ### Added

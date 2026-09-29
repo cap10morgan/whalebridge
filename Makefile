@@ -19,7 +19,7 @@ daemon:
 	git submodule update --init
 	git -C vendor/socktainer checkout -- .
 	git -C vendor/socktainer clean -fd
-	for p in $(ROOT)/patches/*.patch; do git -C vendor/socktainer apply "$$p"; done
+	set -e; for p in $(ROOT)/patches/*.patch; do git -C vendor/socktainer apply "$$p"; done
 	# Tags aren't fetched by `submodule update` (CI checkouts especially), and
 	# the release-vs-sha distinction above needs them; offline is fine — the
 	# sha fallback still applies.
