@@ -4,8 +4,14 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-09
+
 ### Changed
 - Updated the bundled socktainer daemon to v1.5.2, which pins Apple's container runtime to 1.5.0 (up from 1.2.0) — Whalebridge offers to install it on systems running an older version, as with prior runtime bumps. apple/container 1.2.0 breaks outbound networking from containers on macOS 27. Three of our local patches were dropped because socktainer now handles the same cases upstream: `--privileged` granting all capabilities (socktainer#364), `docker cp` and archive reads against a never-started container (socktainer#372, #379, #395 — served from the image snapshot and staged until start, replacing our experimental bootstrap-on-demand), and the missing-runtime-state error messages that went with it. The concurrent-create 409 mapping and the Settings-driven default memory limit remain as local patches; the latter now layers onto socktainer's new support for Apple Container's `[container]` defaults, taking precedence over them when set. The socktainer releases since our last pin also bring a long list of upstream fixes, among them: `docker ps` filters (map-form filters are decoded, and `name` filters match as regexes); files copied into a not-yet-started container being applied before an attached start; volumes declared by an image's `VOLUME` instruction, whose anonymous volumes are now cleaned up with the container; image IDs accepted by `docker inspect`/`history`/`tag`/`rmi`/`create`; builds reporting their image ID and untagged builds showing up as dangling images; `docker rename` for never-started containers; image `HEALTHCHECK`s inherited on create; `--add-host` entries written to `/etc/hosts`; `-P`/`--publish-all` publishing exposed ports; DNS on named networks forwarded to the vmnet gateway resolver; and `docker events` reporting containers and images changed outside the Docker API (e.g. with the `container` CLI). One behavior change to be aware of: socktainer no longer rewrites `127.0.0.1:PORT` to the network gateway in environment variables of containers on named networks, since that broke client-facing URLs — containers that relied on it can opt back in with the `socktainer.rewrite-loopback=true` label.
+
+### Fixed
+- On a fresh install of Apple's container runtime, every `docker run`/`docker create` failed with "default kernel not configured". `container system start` asks before installing a missing default kernel, and when launched by Whalebridge — with no terminal to answer — that prompt read as "no". Whalebridge now starts the services with kernel install enabled, and installs the recommended kernel itself if the services are already running without one.
+- When Whalebridge downloads Apple's container runtime installer, the Installer window now comes to the front instead of opening behind other windows, where the install looked like it had silently done nothing.
 
 ## [0.3.1] - 2026-09-14
 
@@ -91,7 +97,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cap10morgan/whalebridge/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/cap10morgan/whalebridge/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/cap10morgan/whalebridge/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cap10morgan/whalebridge/compare/v0.1.7...v0.2.0
