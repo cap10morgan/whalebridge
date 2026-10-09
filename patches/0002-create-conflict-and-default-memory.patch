@@ -1,18 +1,18 @@
 diff --git a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
-index bf25798..c53eb5e 100644
+index 777637c..b0031ca 100644
 --- a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
 +++ b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
-@@ -720,6 +720,9 @@ extension ContainerCreateRoute {
-                 req.logger.debug("Container created successfully with ID: \(container.id)")
-                 ContainerCreateRoute.populateEmptyVolumes(copyUpCandidates, for: container, logger: req.logger)
-             } catch {
-+                if let conflict = ContainerCreateRoute.existingContainerConflict(in: error, requestedId: containerConfiguration.id) {
-+                    throw conflict
-+                }
-                 req.logger.error("Failed to create container: \(error)")
-                 throw Abort(.internalServerError, reason: "Failed to create container: \(error)")
-             }
-@@ -890,6 +893,36 @@ extension ContainerCreateRoute {
+@@ -768,6 +768,9 @@ extension ContainerCreateRoute {
+                     req.logger.debug("Container created successfully with ID: \(container.id)")
+                     ContainerCreateRoute.populateEmptyVolumes(copyUpCandidates, for: container, logger: req.logger)
+                 } catch {
++                    if let conflict = ContainerCreateRoute.existingContainerConflict(in: error, requestedId: containerConfiguration.id) {
++                        throw conflict
++                    }
+                     req.logger.error("Failed to create container: \(error)")
+                     throw Abort(.internalServerError, reason: "Failed to create container: \(error)")
+                 }
+@@ -952,6 +955,36 @@ extension ContainerCreateRoute {
          return capAdd
      }
  
@@ -99,10 +99,10 @@ index eadb89b..4693972 100644
      static func cpus(
          requestedNanoCpus: Int?,
 diff --git a/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift b/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
-index 2c23177..0eac7a9 100644
+index 64e0d9f..f5a80a7 100644
 --- a/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
 +++ b/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
-@@ -477,6 +477,41 @@ struct VCpusConversionTests {
+@@ -485,6 +485,41 @@ struct VCpusConversionTests {
      }
  }
  
