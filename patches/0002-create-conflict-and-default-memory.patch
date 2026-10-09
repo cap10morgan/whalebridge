@@ -1,0 +1,211 @@
+diff --git a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
+index 777637c..b0031ca 100644
+--- a/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
++++ b/Sources/socktainer/Routes/Containers/ContainerCreateRoute.swift
+@@ -768,6 +768,9 @@ extension ContainerCreateRoute {
+                     req.logger.debug("Container created successfully with ID: \(container.id)")
+                     ContainerCreateRoute.populateEmptyVolumes(copyUpCandidates, for: container, logger: req.logger)
+                 } catch {
++                    if let conflict = ContainerCreateRoute.existingContainerConflict(in: error, requestedId: containerConfiguration.id) {
++                        throw conflict
++                    }
+                     req.logger.error("Failed to create container: \(error)")
+                     throw Abort(.internalServerError, reason: "Failed to create container: \(error)")
+                 }
+@@ -952,6 +955,36 @@ extension ContainerCreateRoute {
+         return capAdd
+     }
+ 
++    /// Apple Container's create serializes concurrent creates under a lock and
++    /// rejects a second create for the same id with a `.exists` error, wrapped
++    /// as the `cause` of the internalError ContainerClient.create throws on any
++    /// XPC failure — so the interesting code can be a couple of layers down,
++    /// not on the top-level error. This is exactly the race buildx's
++    /// docker-container driver is built to survive: when several `docker buildx
++    /// build` processes bootstrap the same builder container concurrently
++    /// (e.g. a multi-image build script), all but one lose the create race.
++    /// Real Docker reports that as an HTTP 409 Conflict, which is what buildx's
++    /// error classification (keyed off status code, not message text) checks
++    /// for to treat the loss as benign and reuse the winner's container instead
++    /// of failing the whole build. Flattening every create failure to a 500,
++    /// as the generic catch-all used to, hid that signal and turned a
++    /// same-machine build race into a hard failure.
++    static func existingContainerConflict(in error: Error, requestedId: String) -> Abort? {
++        var current: Error? = error
++        while let containerizationError = current as? ContainerizationError {
++            if containerizationError.code == .exists {
++                return Abort(
++                    .conflict,
++                    reason:
++                        "Conflict. The container name \"\(requestedId)\" is already in use."
++                        + " You have to remove (or rename) that container to be able to reuse that name."
++                )
++            }
++            current = containerizationError.cause
++        }
++        return nil
++    }
++
+     /// Mirrors moby's daemon_unix.go cpu subsystem checks (v28.5.2): NanoCpus and the CFS
+     /// period/quota knobs are mutually exclusive, NanoCpus must fall within the host's core
+     /// count, and CpuShares must be a positive weight. Returns the moby-verbatim error message
+diff --git a/Sources/socktainer/Utilities/ContainerResourceDefaults.swift b/Sources/socktainer/Utilities/ContainerResourceDefaults.swift
+index eadb89b..4693972 100644
+--- a/Sources/socktainer/Utilities/ContainerResourceDefaults.swift
++++ b/Sources/socktainer/Utilities/ContainerResourceDefaults.swift
+@@ -1,5 +1,6 @@
+ import ContainerAPIClient
+ import ContainerPersistence
++import Foundation
+ import Logging
+ import SystemPackage
+ 
+@@ -73,16 +74,36 @@ actor ContainerResourceDefaults {
+ /// `[container]` block was consulted at all.
+ enum ContainerResourceResolution {
+     /// Memory in bytes, or `nil` to leave `ContainerConfiguration` untouched.
++    ///
++    /// An embedder (e.g. Whalebridge) can set `SOCKTAINER_DEFAULT_MEMORY_PERCENT`
++    /// to size unlimited containers as a percentage of host RAM instead: Apple
++    /// Container's stock 1 GiB is too little for real workloads (a Node/vite
++    /// build can OOM well under it), and Docker's "no limit" has no VM
++    /// equivalent. When set, it takes precedence over the configured default.
+     static func memoryInBytes(
+         requested: Int?,
+-        configured: ContainerPersistence.ContainerConfig?
++        configured: ContainerPersistence.ContainerConfig?,
++        environment: [String: String] = ProcessInfo.processInfo.environment,
++        hostMemory: UInt64 = ProcessInfo.processInfo.physicalMemory
+     ) -> UInt64? {
+         if let requested, requested > 0 {
+             return UInt64(requested)
+         }
++        if let percent = defaultMemoryPercent(environment: environment), hostMemory > 0 {
++            return UInt64((Double(hostMemory) * percent / 100).rounded(.down))
++        }
+         return configured?.memory.toUInt64(unit: .bytes)
+     }
+ 
++    /// `SOCKTAINER_DEFAULT_MEMORY_PERCENT` as a percentage in (0, 100], or `nil`
++    /// when it is absent or invalid.
++    static func defaultMemoryPercent(environment: [String: String]) -> Double? {
++        guard let raw = environment["SOCKTAINER_DEFAULT_MEMORY_PERCENT"],
++            let value = Double(raw), value > 0, value <= 100
++        else { return nil }
++        return value
++    }
++
+     /// vCPU count, or `nil` to leave `ContainerConfiguration` untouched.
+     static func cpus(
+         requestedNanoCpus: Int?,
+diff --git a/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift b/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
+index 64e0d9f..f5a80a7 100644
+--- a/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
++++ b/Tests/socktainerTests/Routes/ContainerCreateRouteTests.swift
+@@ -485,6 +485,41 @@ struct VCpusConversionTests {
+     }
+ }
+ 
++@Suite("ContainerCreateRoute.existingContainerConflict")
++struct ExistingContainerConflictTests {
++
++    @Test("a top-level .exists ContainerizationError maps to 409 Conflict")
++    func topLevelExists() throws {
++        let error = ContainerizationError(.exists, message: "container already exists: foo")
++        let conflict = try #require(ContainerCreateRoute.existingContainerConflict(in: error, requestedId: "foo"))
++        #expect(conflict.status == .conflict)
++        #expect(conflict.reason.contains("foo"))
++    }
++
++    @Test("a .exists error wrapped as the cause of ContainerClient.create's internalError still maps to 409")
++    func wrappedInCreateClientError() throws {
++        // Mirrors apple/container's ContainerClient.create, which wraps any XPC
++        // failure in a fresh internalError with the original as `cause`.
++        let inner = ContainerizationError(.exists, message: "container already exists: buildx_buildkit_whalebridge")
++        let outer = ContainerizationError(.internalError, message: "failed to create container", cause: inner)
++        let conflict = try #require(
++            ContainerCreateRoute.existingContainerConflict(in: outer, requestedId: "buildx_buildkit_whalebridge"))
++        #expect(conflict.status == .conflict)
++    }
++
++    @Test("an unrelated error returns nil so the generic 500 path still applies")
++    func unrelatedErrorReturnsNil() {
++        let error = ContainerizationError(.notFound, message: "no such image")
++        #expect(ContainerCreateRoute.existingContainerConflict(in: error, requestedId: "foo") == nil)
++    }
++
++    @Test("a non-ContainerizationError returns nil")
++    func nonContainerizationErrorReturnsNil() {
++        struct SomeOtherError: Error {}
++        #expect(ContainerCreateRoute.existingContainerConflict(in: SomeOtherError(), requestedId: "foo") == nil)
++    }
++}
++
+ @Suite("ContainerCreateRoute.validateCpuLimits")
+ struct CpuLimitsValidationTests {
+ 
+diff --git a/Tests/socktainerTests/Utilities/ContainerResourceResolutionTests.swift b/Tests/socktainerTests/Utilities/ContainerResourceResolutionTests.swift
+index 1ddebee..4654158 100644
+--- a/Tests/socktainerTests/Utilities/ContainerResourceResolutionTests.swift
++++ b/Tests/socktainerTests/Utilities/ContainerResourceResolutionTests.swift
+@@ -86,4 +86,60 @@ struct ContainerResourceResolutionTests {
+         #expect(ContainerResourceResolution.memoryInBytes(requested: nil, configured: nil) == nil)
+         #expect(ContainerResourceResolution.cpus(requestedNanoCpus: nil, configured: nil) == nil)
+     }
++
++    // MARK: - SOCKTAINER_DEFAULT_MEMORY_PERCENT
++
++    private let sixteenGiB: UInt64 = 16 * 1024 * 1024 * 1024
++
++    @Test("the percent default sizes an unlimited container from host RAM, ahead of the configured default")
++    func percentDefaultWinsOverConfigured() throws {
++        let resolved = ContainerResourceResolution.memoryInBytes(
++            requested: nil,
++            configured: try configured(cpus: 6, memory: "4gb"),
++            environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "75"],
++            hostMemory: sixteenGiB
++        )
++        #expect(resolved == UInt64(12) * 1024 * 1024 * 1024)
++    }
++
++    @Test("the percent default applies when the configured defaults cannot be read")
++    func percentDefaultWithoutConfigured() {
++        let resolved = ContainerResourceResolution.memoryInBytes(
++            requested: 0,
++            configured: nil,
++            environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "50"],
++            hostMemory: sixteenGiB
++        )
++        #expect(resolved == UInt64(8) * 1024 * 1024 * 1024)
++    }
++
++    @Test("an explicit memory request still wins over the percent default")
++    func explicitMemoryWinsOverPercent() {
++        let resolved = ContainerResourceResolution.memoryInBytes(
++            requested: Int(twoGiB),
++            configured: nil,
++            environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "75"],
++            hostMemory: sixteenGiB
++        )
++        #expect(resolved == twoGiB)
++    }
++
++    @Test("an absent or invalid percent falls through to the configured default")
++    func invalidPercentFallsThrough() throws {
++        let config = try configured(cpus: 6, memory: "4gb")
++        #expect(
++            ContainerResourceResolution.memoryInBytes(
++                requested: nil, configured: config, environment: [:], hostMemory: sixteenGiB) == fourGiB)
++        for raw in ["not-a-number", "0", "-10", "100.5", ""] {
++            let env = ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": raw]
++            #expect(
++                ContainerResourceResolution.memoryInBytes(
++                    requested: nil, configured: config, environment: env, hostMemory: sixteenGiB) == fourGiB)
++        }
++    }
++
++    @Test("100 is the maximum accepted percent")
++    func percentMaxAccepted() {
++        #expect(ContainerResourceResolution.defaultMemoryPercent(environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "100"]) == 100)
++    }
+ }

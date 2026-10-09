@@ -308,6 +308,7 @@ final class DaemonManager: ObservableObject {
         } else if !apiserverRunning {
             await startApiserver()
         }
+        await ensureDefaultKernel()
 
         let daemon = Process()
         daemon.executableURL = daemonURL
@@ -317,7 +318,7 @@ final class DaemonManager: ObservableObject {
             "SOCKTAINER_PLATFORM_NAME": "Whalebridge",
             "SOCKTAINER_PLATFORM_VERSION": AppVersion.current,
             // Default memory limit for containers that don't request their own
-            // (patches/0002-container-lifecycle-and-buildx-fixes.patch),
+            // (patches/0002-create-conflict-and-default-memory.patch),
             // configurable in Settings.
             "SOCKTAINER_DEFAULT_MEMORY_PERCENT": "\(AppSettings.shared.defaultContainerMemoryPercent)",
         ]
@@ -472,11 +473,44 @@ final class DaemonManager: ObservableObject {
         guard containerCLIInstalled else { return }
         apiserverTransitioning = true
         defer { apiserverTransitioning = false }
-        let result = await Shell.run(containerCLI, ["system", "start"])
+        // Without --enable-kernel-install, `system start` prompts on stdin
+        // before installing a missing default kernel; with no terminal
+        // attached that reads as "no", leaving a fresh apple/container
+        // install unable to create any container. A no-op when one exists.
+        let result = await Shell.run(containerCLI, ["system", "start", "--enable-kernel-install"])
         if result.status != 0 {
             NSLog("container system start exited \(result.status): \(result.output)")
         }
         await refreshApiserverStatus()
+    }
+
+    /// Installs Apple's recommended default kernel when none is configured.
+    /// `startApiserver` covers this for services we start ourselves, but the
+    /// apiserver may already be running without one (started from a shell,
+    /// or by an older Whalebridge), and then every container create fails
+    /// with "default kernel not configured". apple/container has no command
+    /// that reports the default kernel, so check for its file in the
+    /// apiserver's app root.
+    nonisolated static func defaultKernelPath(statusOutput: String, architecture: String) -> String? {
+        guard let line = statusOutput.split(separator: "\n").first(where: { $0.hasPrefix("paths.appRoot") }) else {
+            return nil
+        }
+        let appRoot = line.dropFirst("paths.appRoot".count).trimmingCharacters(in: .whitespaces)
+        guard !appRoot.isEmpty else { return nil }
+        return URL(fileURLWithPath: appRoot).appending(path: "kernels/default.kernel-\(architecture)").path
+    }
+
+    private func ensureDefaultKernel() async {
+        let status = await Shell.run(containerCLI, ["system", "status"])
+        guard status.status == 0,
+            let path = DaemonManager.defaultKernelPath(statusOutput: status.output, architecture: "arm64")
+        else { return }
+        guard !FileManager.default.fileExists(atPath: path) else { return }
+        NSLog("no default kernel configured — installing the recommended one")
+        let result = await Shell.run(containerCLI, ["system", "kernel", "set", "--recommended"])
+        if result.status != 0 {
+            NSLog("container system kernel set exited \(result.status): \(result.output)")
+        }
     }
 
     /// `container system stop` on an already-stopped service is a harmless
@@ -590,7 +624,20 @@ final class DaemonManager: ObservableObject {
             }
 
             installProgress = "Finish the install in Installer, then Whalebridge starts automatically."
-            NSWorkspace.shared.open(dest)
+            // Cooperative activation: an app can only bring another to the
+            // front by being active and yielding to it. By the time the
+            // download finishes, this menu bar app long since lost focus, so
+            // a plain open() left Installer's window buried behind everything
+            // and the install looked like it silently did nothing.
+            NSApp.activate()
+            NSApp.yieldActivation(toApplicationWithBundleIdentifier: "com.apple.installer")
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            if let installer = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.installer") {
+                _ = try await NSWorkspace.shared.open([dest], withApplicationAt: installer, configuration: configuration)
+            } else {
+                NSWorkspace.shared.open(dest)
+            }
         } catch let failure as InstallFailure {
             installError = failure.message
         } catch {
