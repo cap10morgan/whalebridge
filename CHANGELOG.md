@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- When Apple's container runtime is missing or too old at launch, Whalebridge now checks for a Whalebridge update before offering to install the runtime. If an update is available it's offered first, since a newer Whalebridge may need a newer runtime than the one the current version would install; the runtime offer follows only if there's no update or you decline it. With automatic update checks turned off, the runtime offer appears straight away as before.
+
 ## [0.5.0] - 2026-10-09
 
 ### Changed
