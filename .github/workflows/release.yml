@@ -28,6 +28,7 @@ jobs:
     env:
       HAVE_SIGNING_CERT: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
       HAVE_NOTARY_KEY: ${{ secrets.APPLE_API_KEY_P8 != '' }}
+      HAVE_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v7
@@ -167,3 +168,48 @@ jobs:
           gh release create "$RELEASE_TAG" \
             "build/Whalebridge-$VERSION.zip" build/appcast.xml \
             --title "$RELEASE_TAG" --generate-notes
+
+      # The cask in cap10morgan/homebrew-brew pins a version and the zip's
+      # sha256, so it has to follow every release — by hand, this got
+      # forgotten for three releases running. github.token can't push to
+      # another repository, hence the separate secret: a fine-grained PAT
+      # with Contents read/write on homebrew-brew only.
+      - name: Update Homebrew cask
+        if: env.HAVE_TAP_TOKEN == 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          SHA256="$(shasum -a 256 "build/Whalebridge-$VERSION.zip" | cut -d' ' -f1)"
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/cap10morgan/homebrew-brew.git" \
+            "$RUNNER_TEMP/homebrew-brew"
+          cd "$RUNNER_TEMP/homebrew-brew"
+          CASK=Casks/whalebridge.rb
+          CURRENT="$(sed -n 's/^  version "\(.*\)"$/\1/p' "$CASK")"
+          [[ -n "$CURRENT" ]] || { echo "could not read the current version from $CASK" >&2; exit 1; }
+          # A manual re-run for an older tag must not move the cask backwards.
+          if [[ "$CURRENT" != "$VERSION" && "$(printf '%s\n%s\n' "$CURRENT" "$VERSION" | sort -V | tail -1)" == "$CURRENT" ]]; then
+            echo "Cask is already at $CURRENT, newer than $VERSION — leaving it alone."
+            exit 0
+          fi
+          sed -i '' \
+            -e "s/^  version \".*\"$/  version \"$VERSION\"/" \
+            -e "s/^  sha256 \".*\"$/  sha256 \"$SHA256\"/" "$CASK"
+          grep -q "^  version \"$VERSION\"$" "$CASK" && grep -q "^  sha256 \"$SHA256\"$" "$CASK" || {
+            echo "failed to rewrite version/sha256 in $CASK" >&2; exit 1
+          }
+          if git diff --quiet; then
+            echo "Cask already points at $VERSION with this sha256."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -am "whalebridge $VERSION"
+          git push origin HEAD
+
+      # Loud rather than silent: a skipped cask update is exactly the
+      # failure this step exists to prevent.
+      - name: Warn that the Homebrew cask was not updated
+        if: env.HAVE_TAP_TOKEN != 'true'
+        run: echo "::warning::HOMEBREW_TAP_TOKEN is not set — the Homebrew cask was NOT updated for ${RELEASE_TAG}. Update Casks/whalebridge.rb in cap10morgan/homebrew-brew by hand."
