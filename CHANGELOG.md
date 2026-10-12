@@ -4,6 +4,8 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-12
+
 ### Changed
 - Updated the bundled socktainer daemon to v1.5.3 (Apple's container runtime requirement is unchanged at 1.5.x). It brings upstream fixes for `docker exec` without attached stdin from clients that request a connection upgrade; `docker cp` out of a running container not finding files the container had only just written (which left e.g. `act` step outputs empty); DNS on multi-homed containers answering with an address from the wrong network; health checks running as root instead of the container's user (which broke DDEV's router when starting a second project); and input piped to an attached container being silently dropped beyond 1 MiB.
 - When Apple's container runtime is missing or too old at launch, Whalebridge now checks for a Whalebridge update before offering to install the runtime. If an update is available it's offered first, since a newer Whalebridge may need a newer runtime than the one the current version would install; the runtime offer follows only if there's no update or you decline it. With automatic update checks turned off, the runtime offer appears straight away as before.
@@ -101,7 +103,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/cap10morgan/whalebridge/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/cap10morgan/whalebridge/compare/v0.3.1...v0.5.0
 [0.3.1]: https://github.com/cap10morgan/whalebridge/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/cap10morgan/whalebridge/compare/v0.2.0...v0.3.0
