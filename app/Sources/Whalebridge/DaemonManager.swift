@@ -189,7 +189,12 @@ final class DaemonManager: ObservableObject {
             }
         }
         if runtimeStatus.needsInstall {
-            offerRuntimeInstall()
+            // A newer Whalebridge may need a newer runtime than this build
+            // does, so installing ours first would be wasted effort. Offer the
+            // update instead; the updated app makes its own runtime offer.
+            if await Updater.shared.offerAvailableUpdate() { return }
+            // They may have installed the runtime by hand while deciding.
+            if runtimeStatus.needsInstall { offerRuntimeInstall() }
         }
     }
 
