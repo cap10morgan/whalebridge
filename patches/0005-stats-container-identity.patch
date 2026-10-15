@@ -1,0 +1,452 @@
+diff --git a/Sources/socktainer/Models/RESTContainerStats.swift b/Sources/socktainer/Models/RESTContainerStats.swift
+index 1a9402d..f9ae9c3 100644
+--- a/Sources/socktainer/Models/RESTContainerStats.swift
++++ b/Sources/socktainer/Models/RESTContainerStats.swift
+@@ -5,7 +5,8 @@ import Vapor
+ // MARK: - Docker /containers/{id}/stats response model
+ 
+ struct RESTContainerStats: Content {
+-    let id: String
++    let id: String  // Docker-shaped container ID
++    let name: String  // "/" + container name, as Docker reports it
+     let read: String  // ISO8601 timestamp of this sample
+     let preread: String  // ISO8601 timestamp of previous sample
+ 
+@@ -84,6 +85,7 @@ extension RESTContainerStats {
+     /// clients can compute the standard CPU% formula without dividing by zero.
+     static func build(
+         id: String,
++        name: String,
+         prev: ContainerResource.ContainerStats,
+         curr: ContainerResource.ContainerStats,
+         prevRead: Date,
+@@ -135,6 +137,7 @@ extension RESTContainerStats {
+ 
+         return RESTContainerStats(
+             id: id,
++            name: name,
+             read: iso8601.string(from: currRead),
+             preread: iso8601.string(from: prevRead),
+             cpu_stats: cpuStats(from: curr, systemCPU: systemCPU),
+diff --git a/Sources/socktainer/Routes/Containers/ContainerStatsRoute.swift b/Sources/socktainer/Routes/Containers/ContainerStatsRoute.swift
+index a5eca28..e324370 100644
+--- a/Sources/socktainer/Routes/Containers/ContainerStatsRoute.swift
++++ b/Sources/socktainer/Routes/Containers/ContainerStatsRoute.swift
+@@ -1,77 +1,109 @@
+ import ContainerAPIClient
++import ContainerResource
+ import Foundation
+ import Vapor
+ 
+ struct ContainerStatsRoute: RouteCollection {
++    let client: ClientContainerProtocol
++    /// Takes one stats sample for a container by its native ID.
++    let sample: @Sendable (String) async throws -> ContainerResource.ContainerStats
++    /// Time between the two samples a CPU delta is computed from.
++    let sampleInterval: Duration
++
++    init(
++        client: ClientContainerProtocol,
++        sample: @escaping @Sendable (String) async throws -> ContainerResource.ContainerStats = {
++            try await ContainerClient().stats(id: $0)
++        },
++        sampleInterval: Duration = .seconds(1)
++    ) {
++        self.client = client
++        self.sample = sample
++        self.sampleInterval = sampleInterval
++    }
++
+     func boot(routes: RoutesBuilder) throws {
+         try routes.registerVersionedRoute(
+-            .GET, pattern: "/containers/{id}/stats", use: ContainerStatsRoute.handler)
++            .GET, pattern: "/containers/{id}/stats",
++            use: ContainerStatsRoute.handler(client: client, sample: sample, sampleInterval: sampleInterval))
+     }
++}
+ 
+-    static func handler(_ req: Request) async throws -> Response {
+-        guard let id = req.parameters.get("id") else {
+-            throw Abort(.badRequest, reason: "Missing container ID")
+-        }
++extension ContainerStatsRoute {
++    static func handler(
++        client: ClientContainerProtocol,
++        sample: @escaping @Sendable (String) async throws -> ContainerResource.ContainerStats,
++        sampleInterval: Duration
++    ) -> @Sendable (Request) async throws -> Response {
++        { req in
++            guard let reference = req.parameters.get("id") else {
++                throw Abort(.badRequest, reason: "Missing container ID")
++            }
+ 
+-        let stream = MobyBool.queryValue(req.query["stream"] as String?, defaultingTo: true)
+-        let client = ContainerClient()
++            let stream = MobyBool.queryValue(req.query["stream"] as String?, defaultingTo: true)
+ 
+-        // Verify container exists before starting to stream
+-        guard (try? await client.get(id: id)) != nil else {
+-            throw Abort(.notFound, reason: "No such container: \(id)")
+-        }
++            // Resolve the reference the way the other container routes do, so a
++            // Docker-shaped ID or ID prefix (as `docker ps` and `docker stats`
++            // with no arguments pass it) finds the container, not just its name.
++            guard let container = try await client.getContainer(id: reference) else {
++                throw Abort(.notFound, reason: "No such container: \(reference)")
++            }
++            let nativeId = container.id
++            let dockerId = DockerContainerID.hexId(for: container)
++            let name = "/" + container.id
+ 
+-        var headers = HTTPHeaders()
+-        headers.add(name: "Content-Type", value: "application/json")
++            var headers = HTTPHeaders()
++            headers.add(name: "Content-Type", value: "application/json")
+ 
+-        let body = Response.Body { writer in
+-            Task.detached {
+-                defer { _ = writer.write(.end) }
++            let body = Response.Body { writer in
++                Task.detached {
++                    defer { _ = writer.write(.end) }
+ 
+-                do {
+-                    var prevSample = try await client.stats(id: id)
+-                    var prevRead = Date()
++                    do {
++                        var prevSample = try await sample(nativeId)
++                        var prevRead = Date()
+ 
+-                    if stream {
+-                        // Streaming mode: emit one JSON object per second indefinitely
+-                        // until the client disconnects or the container stops.
+-                        while true {
+-                            try await Task.sleep(nanoseconds: 1_000_000_000)
+-                            guard let currSample = try? await client.stats(id: id) else { break }
++                        if stream {
++                            // Streaming mode: emit one JSON object per interval indefinitely
++                            // until the client disconnects or the container stops.
++                            while true {
++                                try await Task.sleep(for: sampleInterval)
++                                guard let currSample = try? await sample(nativeId) else { break }
++                                let currRead = Date()
++                                let stats = RESTContainerStats.build(
++                                    id: dockerId, name: name, prev: prevSample, curr: currSample,
++                                    prevRead: prevRead, currRead: currRead)
++                                if let data = try? JSONEncoder().encode(stats) {
++                                    var buf = sharedAllocator.buffer(capacity: data.count + 1)
++                                    buf.writeBytes(data)
++                                    buf.writeString("\n")
++                                    _ = writer.write(.buffer(buf))
++                                }
++                                prevSample = currSample
++                                prevRead = currRead
++                            }
++                        } else {
++                            // One-shot mode: take two samples one interval apart to get a
++                            // CPU delta, then return a single JSON object and close.
++                            try await Task.sleep(for: sampleInterval)
++                            guard let currSample = try? await sample(nativeId) else { return }
+                             let currRead = Date()
+                             let stats = RESTContainerStats.build(
+-                                id: id, prev: prevSample, curr: currSample,
++                                id: dockerId, name: name, prev: prevSample, curr: currSample,
+                                 prevRead: prevRead, currRead: currRead)
+                             if let data = try? JSONEncoder().encode(stats) {
+-                                var buf = sharedAllocator.buffer(capacity: data.count + 1)
++                                var buf = sharedAllocator.buffer(capacity: data.count)
+                                 buf.writeBytes(data)
+-                                buf.writeString("\n")
+                                 _ = writer.write(.buffer(buf))
+                             }
+-                            prevSample = currSample
+-                            prevRead = currRead
+-                        }
+-                    } else {
+-                        // One-shot mode: take two samples 1s apart to get a CPU delta,
+-                        // then return a single JSON object and close.
+-                        try await Task.sleep(nanoseconds: 1_000_000_000)
+-                        guard let currSample = try? await client.stats(id: id) else { return }
+-                        let currRead = Date()
+-                        let stats = RESTContainerStats.build(
+-                            id: id, prev: prevSample, curr: currSample,
+-                            prevRead: prevRead, currRead: currRead)
+-                        if let data = try? JSONEncoder().encode(stats) {
+-                            var buf = sharedAllocator.buffer(capacity: data.count)
+-                            buf.writeBytes(data)
+-                            _ = writer.write(.buffer(buf))
+                         }
++                    } catch {
++                        // Container gone or stats unavailable — close stream cleanly
+                     }
+-                } catch {
+-                    // Container gone or stats unavailable — close stream cleanly
+                 }
+             }
+-        }
+ 
+-        return Response(status: .ok, headers: headers, body: body)
++            return Response(status: .ok, headers: headers, body: body)
++        }
+     }
+ }
+diff --git a/Sources/socktainer/configure.swift b/Sources/socktainer/configure.swift
+index f072d51..51711d8 100644
+--- a/Sources/socktainer/configure.swift
++++ b/Sources/socktainer/configure.swift
+@@ -81,7 +81,7 @@ func configure(_ app: Application) async throws {
+     try app.register(collection: ContainerResizeRoute(client: containerClient))
+     try app.register(collection: ContainerRestartRoute(client: containerClient))
+     try app.register(collection: ContainerStartRoute(client: containerClient))
+-    try app.register(collection: ContainerStatsRoute())
++    try app.register(collection: ContainerStatsRoute(client: containerClient))
+     try app.register(collection: ContainerStopRoute(client: containerClient))
+     try app.register(collection: ContainerTopRoute())
+     try app.register(collection: ContainerUnpauseRoute())
+diff --git a/Tests/socktainerTests/Routes/ContainerStatsRouteTests.swift b/Tests/socktainerTests/Routes/ContainerStatsRouteTests.swift
+new file mode 100644
+index 0000000..bd164c2
+--- /dev/null
++++ b/Tests/socktainerTests/Routes/ContainerStatsRouteTests.swift
+@@ -0,0 +1,122 @@
++import ContainerAPIClient
++import ContainerResource
++import ContainerizationOCI
++import Foundation
++import Testing
++import Vapor
++import VaporTesting
++
++@testable import socktainer
++
++/// Regression tests for issue #463: `GET /containers/{id}/stats` only found a
++/// container by its native name, and reported neither the container's name nor
++/// its Docker ID. It has to resolve references the way the other container
++/// routes do (`docker stats` with no arguments passes full hex IDs), sample by
++/// the native ID, and report `id` and `name` as Docker does.
++@Suite("ContainerStatsRoute")
++struct ContainerStatsRouteTests {
++
++    /// Resolves a reference like `ClientContainerService.getContainer`: the
++    /// native ID, or a full or prefix Docker ID.
++    private struct ResolvingClient: ClientContainerProtocol {
++        let containers: [ContainerSnapshot]
++
++        func list(showAll: Bool, filters: [String: [String]]) async throws -> [ContainerSnapshot] { containers }
++        func getContainer(id: String) async throws -> ContainerSnapshot? {
++            containers.first { $0.id == id || DockerContainerID.hexId(for: $0).hasPrefix(id) }
++        }
++        func enforceContainerRunning(container: ContainerSnapshot) throws {}
++        func start(id: String, detachKeys: String?) async throws {}
++        func stop(id: String, signal: String?, timeout: Int?) async throws {}
++        func restart(id: String, signal: String?, timeout: Int?) async throws {}
++        func kill(id: String, signal: String?) async throws {}
++        func delete(id: String) async throws {}
++        func wait(id: String, condition: ContainerWaitCondition) async throws -> RESTContainerWait {
++            RESTContainerWait(statusCode: 0)
++        }
++        func prune(filters: [String: [String]]) async throws -> (deletedContainers: [String], spaceReclaimed: Int64) {
++            ([], 0)
++        }
++    }
++
++    /// Records which native IDs were sampled.
++    private actor SampledIDs {
++        private(set) var ids: [String] = []
++        func record(_ id: String) { ids.append(id) }
++    }
++
++    private static func makeSnapshot(id: String) -> ContainerSnapshot {
++        let process = ProcessConfiguration(
++            executable: "/bin/sh", arguments: [], environment: [], workingDirectory: "/",
++            terminal: false, user: .id(uid: 0, gid: 0))
++        let image = ImageDescription(
++            reference: "alpine:latest",
++            descriptor: Descriptor(mediaType: "application/vnd.oci.image.index.v1+json", digest: "sha256:abc", size: 0))
++        return ContainerSnapshot(
++            configuration: ContainerConfiguration(id: id, image: image, process: process),
++            status: .running,
++            networks: [],
++            startedDate: Date(timeIntervalSinceNow: -30))
++    }
++
++    private func withRoute(
++        containers: [ContainerSnapshot],
++        sampled: SampledIDs,
++        test: @escaping (Application) async throws -> Void
++    ) async throws {
++        try await withApp(configure: { _ in }) { app in
++            let regexRouter = app.regexRouter(with: app.logger)
++            app.setRegexRouter(regexRouter)
++            regexRouter.installMiddleware(on: app)
++            let route = ContainerStatsRoute(
++                client: ResolvingClient(containers: containers),
++                sample: { id in
++                    await sampled.record(id)
++                    return ContainerStats(
++                        id: id, memoryUsageBytes: 1024, memoryLimitBytes: 4096, cpuUsageUsec: 10,
++                        networkRxBytes: nil, networkTxBytes: nil, blockReadBytes: nil, blockWriteBytes: nil,
++                        numProcesses: 1)
++                },
++                sampleInterval: .milliseconds(10))
++            try app.register(collection: route)
++            try await test(app)
++        }
++    }
++
++    @Test(
++        "Resolves a container by name, full Docker ID, or ID prefix, and reports its Docker ID and name",
++        arguments: ["name", "full ID", "ID prefix"])
++    func resolvesReferenceAndReportsIdentity(form: String) async throws {
++        let container = Self.makeSnapshot(id: "web")
++        let hexId = DockerContainerID.hexId(for: container)
++        let reference =
++            switch form {
++            case "name": "web"
++            case "full ID": hexId
++            default: String(hexId.prefix(12))
++            }
++        let sampled = SampledIDs()
++
++        try await withRoute(containers: [container], sampled: sampled) { app in
++            try await app.testing().test(.GET, "/v1.51/containers/\(reference)/stats?stream=false") { res async throws in
++                #expect(res.status == .ok)
++                let json = try JSONSerialization.jsonObject(with: Data(buffer: res.body)) as? [String: Any]
++                #expect(json?["id"] as? String == hexId)
++                #expect(json?["name"] as? String == "/web")
++            }
++        }
++        // Samples are taken by native ID, whatever form the request used.
++        #expect(await sampled.ids == ["web", "web"])
++    }
++
++    @Test("Unknown container returns 404 without sampling")
++    func unknownContainerIsNotFound() async throws {
++        let sampled = SampledIDs()
++        try await withRoute(containers: [Self.makeSnapshot(id: "web")], sampled: sampled) { app in
++            try await app.testing().test(.GET, "/v1.51/containers/nope/stats?stream=false") { res async in
++                #expect(res.status == .notFound)
++            }
++        }
++        #expect(await sampled.ids.isEmpty)
++    }
++}
+diff --git a/Tests/socktainerTests/Routes/ContainerStatsTests.swift b/Tests/socktainerTests/Routes/ContainerStatsTests.swift
+index 8187ad5..1021508 100644
+--- a/Tests/socktainerTests/Routes/ContainerStatsTests.swift
++++ b/Tests/socktainerTests/Routes/ContainerStatsTests.swift
+@@ -40,7 +40,7 @@ struct ContainerStatsTests {
+         let curr = makeSample(cpuUsec: 2_000_000)
+         let t0 = Date()
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+-        let stats = RESTContainerStats.build(id: "c1", prev: prev, curr: curr, prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: prev, curr: curr, prevRead: t0, currRead: t1)
+         #expect(stats.cpu_stats.cpu_usage.total_usage == 2_000_000_000)
+         #expect(stats.precpu_stats.cpu_usage.total_usage == 1_000_000_000)
+     }
+@@ -50,7 +50,7 @@ struct ContainerStatsTests {
+         let sample = makeSample(cpuUsec: 500_000)
+         let t0 = Date()
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+-        let stats = RESTContainerStats.build(id: "c1", prev: sample, curr: sample, prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: sample, curr: sample, prevRead: t0, currRead: t1)
+         #expect(stats.precpu_stats.system_cpu_usage == 0)
+     }
+ 
+@@ -59,7 +59,7 @@ struct ContainerStatsTests {
+         let sample = makeSample()
+         let t0 = Date()
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+-        let stats = RESTContainerStats.build(id: "c1", prev: sample, curr: sample, prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: sample, curr: sample, prevRead: t0, currRead: t1)
+         let expected = UInt64(hostCPUCoreCount()) * 1_000_000_000
+         // Allow ±5ms tolerance for timing
+         #expect(abs(Int64(stats.cpu_stats.system_cpu_usage) - Int64(expected)) < 5_000_000)
+@@ -70,7 +70,7 @@ struct ContainerStatsTests {
+         let sample = makeSample()
+         let t0 = Date()
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+-        let stats = RESTContainerStats.build(id: "c1", prev: sample, curr: sample, prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: sample, curr: sample, prevRead: t0, currRead: t1)
+         #expect(stats.cpu_stats.online_cpus == hostCPUCoreCount())
+     }
+ 
+@@ -79,7 +79,7 @@ struct ContainerStatsTests {
+         let curr = makeSample(memUsage: 128_000_000, memLimit: 4_000_000_000)
+         let t0 = Date()
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+-        let stats = RESTContainerStats.build(id: "c1", prev: makeSample(), curr: curr, prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: makeSample(), curr: curr, prevRead: t0, currRead: t1)
+         #expect(stats.memory_stats.usage == 128_000_000)
+         #expect(stats.memory_stats.limit == 4_000_000_000)
+     }
+@@ -89,7 +89,7 @@ struct ContainerStatsTests {
+         let curr = makeSample(memUsage: 64_000_000, memLimit: nil)
+         let t0 = Date()
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+-        let stats = RESTContainerStats.build(id: "c1", prev: makeSample(), curr: curr, prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: makeSample(), curr: curr, prevRead: t0, currRead: t1)
+         #expect(stats.memory_stats.limit == hostPhysicalMemory())
+     }
+ 
+@@ -98,7 +98,7 @@ struct ContainerStatsTests {
+         let curr = makeSample(netRx: 1_234, netTx: 5_678)
+         let t0 = Date()
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+-        let stats = RESTContainerStats.build(id: "c1", prev: makeSample(), curr: curr, prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: makeSample(), curr: curr, prevRead: t0, currRead: t1)
+         #expect(stats.networks?["eth0"]?.rx_bytes == 1_234)
+         #expect(stats.networks?["eth0"]?.tx_bytes == 5_678)
+     }
+@@ -107,7 +107,7 @@ struct ContainerStatsTests {
+     func networkStatsNil() {
+         let t0 = Date()
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+-        let stats = RESTContainerStats.build(id: "c1", prev: makeSample(), curr: makeSample(), prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: makeSample(), curr: makeSample(), prevRead: t0, currRead: t1)
+         #expect(stats.networks == nil)
+     }
+ 
+@@ -116,7 +116,7 @@ struct ContainerStatsTests {
+         let curr = makeSample(blkRead: 10_000, blkWrite: 20_000)
+         let t0 = Date()
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+-        let stats = RESTContainerStats.build(id: "c1", prev: makeSample(), curr: curr, prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: makeSample(), curr: curr, prevRead: t0, currRead: t1)
+         let entries = stats.blkio_stats.io_service_bytes_recursive
+         #expect(entries?.first(where: { $0.op == "read" })?.value == 10_000)
+         #expect(entries?.first(where: { $0.op == "write" })?.value == 20_000)
+@@ -127,7 +127,7 @@ struct ContainerStatsTests {
+         let curr = makeSample(pids: 7)
+         let t0 = Date()
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+-        let stats = RESTContainerStats.build(id: "c1", prev: makeSample(), curr: curr, prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: makeSample(), curr: curr, prevRead: t0, currRead: t1)
+         #expect(stats.pids_stats.current == 7)
+     }
+ 
+@@ -135,7 +135,7 @@ struct ContainerStatsTests {
+     func timestamps() {
+         let t0 = Date(timeIntervalSince1970: 1_000_000)
+         let t1 = Date(timeIntervalSince1970: 1_000_001)
+-        let stats = RESTContainerStats.build(id: "c1", prev: makeSample(), curr: makeSample(), prevRead: t0, currRead: t1)
++        let stats = RESTContainerStats.build(id: "c1", name: "/c1", prev: makeSample(), curr: makeSample(), prevRead: t0, currRead: t1)
+         #expect(stats.read.contains("T"))
+         #expect(stats.preread.contains("T"))
+         #expect(stats.read != stats.preread)
+@@ -147,6 +147,7 @@ struct ContainerStatsTests {
+         let t1 = Date(timeIntervalSince1970: t0.timeIntervalSince1970 + 1)
+         let stats = RESTContainerStats.build(
+             id: "c1",
++            name: "/c1",
+             prev: makeSample(cpuUsec: 1_000_000, memUsage: 64_000_000, memLimit: 2_000_000_000),
+             curr: makeSample(
+                 cpuUsec: 2_000_000, memUsage: 128_000_000, memLimit: 2_000_000_000,
+@@ -156,6 +157,7 @@ struct ContainerStatsTests {
+         let data = try JSONEncoder().encode(stats)
+         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+         #expect(json?["id"] as? String == "c1")
++        #expect(json?["name"] as? String == "/c1")
+         #expect(json?["cpu_stats"] != nil)
+         #expect(json?["memory_stats"] != nil)
+         #expect(json?["networks"] != nil)

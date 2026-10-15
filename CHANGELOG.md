@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- `docker stats` with no container arguments hung until some container started or stopped, and when it did run, every container's NAME showed as `--`. `docker stats <id>` also failed with "No such container" when given a container ID rather than its name. These are two socktainer bugs, now patched locally until the upstream fixes are released: `GET /events` held back its response headers until the first event (socktainer#462), and container stats only resolved names and left the name out of the response (socktainer#463).
+
 ## [0.5.2] - 2026-10-15
 
 ### Fixed
