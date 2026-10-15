@@ -121,17 +121,10 @@ final class IdlePowerSavingProxy {
         let backend = NWConnection(to: .unix(path: internalSocketPath), using: backendParams)
         backend.start(queue: .main)
 
-        var closed = false
-        let closeOnce: @MainActor () -> Void = { [weak self] in
-            guard !closed else { return }
-            closed = true
-            client.cancel()
-            backend.cancel()
-            self?.connectionClosed()
-        }
-
-        pump(from: client, to: backend, onClose: closeOnce)
-        pump(from: backend, to: client, onClose: closeOnce)
+        Self.relay(
+            client, backend,
+            onActivity: { [weak self] in self?.lastActivity = Date() },
+            onClose: { [weak self] in self?.connectionClosed() })
     }
 
     private func connectionClosed() {
@@ -139,21 +132,88 @@ final class IdlePowerSavingProxy {
         lastActivity = Date()
     }
 
-    /// Recursively relays from `from` to `to` until either side closes or
-    /// errors, forwarding whatever bytes each read yields before checking
-    /// for completion — a half-close shouldn't drop a final chunk of data.
-    private func pump(from: NWConnection, to: NWConnection, onClose: @escaping @MainActor () -> Void) {
-        from.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
+    /// Relays bytes both ways between two started connections, then cancels
+    /// both and calls `onClose` exactly once — when both directions have
+    /// reached end-of-stream, or as soon as either side errors or fails.
+    ///
+    /// A clean end-of-stream in one direction is passed on as a half-close
+    /// rather than tearing the pair down: the Docker CLI shuts its write
+    /// side right after an exec's `101 Switching Protocols` when it has no
+    /// stdin to send, and still reads the exec's output afterwards (#26).
+    /// A client that's actually gone, rather than just done writing, moves
+    /// its connection to `.failed`, which still closes the pair straight
+    /// away, so a killed client doesn't hold the daemons awake. Not so for
+    /// the backend: socktainer fully closes its socket once it's done, which
+    /// fails that connection while its last output may still be on its way
+    /// to the client — its end-of-stream and errors arrive through `receive`.
+    static func relay(
+        _ client: NWConnection, _ backend: NWConnection,
+        onActivity: @escaping @MainActor () -> Void,
+        onClose: @escaping @MainActor () -> Void
+    ) {
+        var closed = false
+        var openDirections = 2
+        let close: @MainActor () -> Void = {
+            guard !closed else { return }
+            closed = true
+            client.cancel()
+            backend.cancel()
+            onClose()
+        }
+        let finished: @MainActor () -> Void = {
+            openDirections -= 1
+            if openDirections == 0 { close() }
+        }
+
+        client.stateUpdateHandler = { state in
+            guard case .failed = state else { return }
+            Task { @MainActor in close() }
+        }
+        pump(from: client, to: backend, onActivity: onActivity, onFinished: finished, onError: close)
+        pump(from: backend, to: client, onActivity: onActivity, onFinished: finished, onError: close)
+    }
+
+    /// Recursively relays from `from` to `to`, forwarding whatever bytes each
+    /// read yields before checking for completion — a half-close shouldn't
+    /// drop a final chunk of data. On a clean end-of-stream, half-closes `to`
+    /// and stops.
+    ///
+    /// Each read waits for the previous chunk's send to complete, which both
+    /// bounds what's buffered here to one chunk and means `onFinished` only
+    /// runs once everything has actually been handed to `to` — cancelling a
+    /// connection discards sends it hasn't flushed yet, so finishing early
+    /// truncates large outputs.
+    private static func pump(
+        from: NWConnection, to: NWConnection,
+        onActivity: @escaping @MainActor () -> Void,
+        onFinished: @escaping @MainActor () -> Void,
+        onError: @escaping @MainActor () -> Void
+    ) {
+        from.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
             Task { @MainActor in
-                self?.lastActivity = Date()
-                if let data, !data.isEmpty {
-                    to.send(content: data, completion: .contentProcessed { _ in })
+                onActivity()
+                let next: @MainActor () -> Void = {
+                    if error != nil {
+                        onError()
+                    } else if isComplete {
+                        to.send(
+                            content: nil, contentContext: .finalMessage, isComplete: true,
+                            completion: .contentProcessed { _ in
+                                Task { @MainActor in onFinished() }
+                            })
+                    } else {
+                        pump(from: from, to: to, onActivity: onActivity, onFinished: onFinished, onError: onError)
+                    }
                 }
-                if isComplete || error != nil {
-                    onClose()
+                guard let data, !data.isEmpty else {
+                    next()
                     return
                 }
-                self?.pump(from: from, to: to, onClose: onClose)
+                to.send(content: data, completion: .contentProcessed { sendError in
+                    Task { @MainActor in
+                        if sendError != nil { onError() } else { next() }
+                    }
+                })
             }
         }
     }

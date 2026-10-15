@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- With power saving enabled, `docker exec` printed nothing, though the command still ran and its exit code was correct (#26). When an exec has no stdin to send, the Docker CLI half-closes its side of the connection right after the upgrade and keeps reading, and the power-saving proxy treated that as the whole connection closing, dropping the exec's output before socktainer wrote it. The proxy now passes a half-close through to the other side and keeps relaying the other direction, as a direct connection to socktainer would; a client that actually disconnects still closes the connection immediately.
+
 ## [0.5.1] - 2026-10-12
 
 ### Changed
