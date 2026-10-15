@@ -32,6 +32,32 @@ import Testing
         proxy.listener.cancel()
     }
 
+    /// Output still queued for the client when the last direction finishes
+    /// is delivered before the pair is cancelled, rather than truncated —
+    /// e.g. `docker exec … seq 1 200000`.
+    @Test func largeOutputIsDeliveredInFullBeforeClosing() async throws {
+        let payload = String(repeating: "0123456789abcdef\n", count: 256 * 1024)
+        let backend = try await listen { connection in
+            readToEnd(connection) {
+                connection.send(content: Data(payload.utf8), completion: .contentProcessed { _ in })
+                connection.send(
+                    content: nil, contentContext: .finalMessage, isComplete: true,
+                    completion: .contentProcessed { _ in })
+            }
+        }
+        var closes = 0
+        let proxy = try await proxy(to: backend.path) { closes += 1 }
+
+        let received = try await Task.detached {
+            try UnixClient.exchange(path: proxy.path, send: "req", then: .halfClose)
+        }.value
+
+        #expect(received.utf8.count == payload.utf8.count)
+        #expect(await eventually { closes == 1 })
+        backend.listener.cancel()
+        proxy.listener.cancel()
+    }
+
     /// A client that's actually gone (not just done writing), like a
     /// Ctrl-C'd `docker logs -f`, still closes the pair right away, even
     /// with a backend that's gone quiet without closing, so it can't keep the

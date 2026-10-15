@@ -140,9 +140,12 @@ final class IdlePowerSavingProxy {
     /// rather than tearing the pair down: the Docker CLI shuts its write
     /// side right after an exec's `101 Switching Protocols` when it has no
     /// stdin to send, and still reads the exec's output afterwards (#26).
-    /// A peer that's actually gone, rather than just done writing, moves its
-    /// connection to `.failed`, which still closes the pair straight away,
-    /// so a killed client doesn't hold the daemons awake.
+    /// A client that's actually gone, rather than just done writing, moves
+    /// its connection to `.failed`, which still closes the pair straight
+    /// away, so a killed client doesn't hold the daemons awake. Not so for
+    /// the backend: socktainer fully closes its socket once it's done, which
+    /// fails that connection while its last output may still be on its way
+    /// to the client — its end-of-stream and errors arrive through `receive`.
     static func relay(
         _ client: NWConnection, _ backend: NWConnection,
         onActivity: @escaping @MainActor () -> Void,
@@ -162,11 +165,9 @@ final class IdlePowerSavingProxy {
             if openDirections == 0 { close() }
         }
 
-        for connection in [client, backend] {
-            connection.stateUpdateHandler = { state in
-                guard case .failed = state else { return }
-                Task { @MainActor in close() }
-            }
+        client.stateUpdateHandler = { state in
+            guard case .failed = state else { return }
+            Task { @MainActor in close() }
         }
         pump(from: client, to: backend, onActivity: onActivity, onFinished: finished, onError: close)
         pump(from: backend, to: client, onActivity: onActivity, onFinished: finished, onError: close)
@@ -176,6 +177,12 @@ final class IdlePowerSavingProxy {
     /// read yields before checking for completion — a half-close shouldn't
     /// drop a final chunk of data. On a clean end-of-stream, half-closes `to`
     /// and stops.
+    ///
+    /// Each read waits for the previous chunk's send to complete, which both
+    /// bounds what's buffered here to one chunk and means `onFinished` only
+    /// runs once everything has actually been handed to `to` — cancelling a
+    /// connection discards sends it hasn't flushed yet, so finishing early
+    /// truncates large outputs.
     private static func pump(
         from: NWConnection, to: NWConnection,
         onActivity: @escaping @MainActor () -> Void,
@@ -185,24 +192,28 @@ final class IdlePowerSavingProxy {
         from.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
             Task { @MainActor in
                 onActivity()
-                if let data, !data.isEmpty {
-                    to.send(content: data, completion: .contentProcessed { error in
-                        guard error != nil else { return }
-                        Task { @MainActor in onError() }
-                    })
+                let next: @MainActor () -> Void = {
+                    if error != nil {
+                        onError()
+                    } else if isComplete {
+                        to.send(
+                            content: nil, contentContext: .finalMessage, isComplete: true,
+                            completion: .contentProcessed { _ in
+                                Task { @MainActor in onFinished() }
+                            })
+                    } else {
+                        pump(from: from, to: to, onActivity: onActivity, onFinished: onFinished, onError: onError)
+                    }
                 }
-                if error != nil {
-                    onError()
+                guard let data, !data.isEmpty else {
+                    next()
                     return
                 }
-                if isComplete {
-                    to.send(
-                        content: nil, contentContext: .finalMessage, isComplete: true,
-                        completion: .contentProcessed { _ in })
-                    onFinished()
-                    return
-                }
-                pump(from: from, to: to, onActivity: onActivity, onFinished: onFinished, onError: onError)
+                to.send(content: data, completion: .contentProcessed { sendError in
+                    Task { @MainActor in
+                        if sendError != nil { onError() } else { next() }
+                    }
+                })
             }
         }
     }
