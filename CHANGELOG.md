@@ -4,8 +4,11 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-15
+
 ### Fixed
 - With power saving enabled, `docker exec` printed nothing, though the command still ran and its exit code was correct (#26). When an exec has no stdin to send, the Docker CLI half-closes its side of the connection right after the upgrade and keeps reading, and the power-saving proxy treated that as the whole connection closing, dropping the exec's output before socktainer wrote it. The proxy now passes a half-close through to the other side and keeps relaying the other direction, as a direct connection to socktainer would; a client that actually disconnects still closes the connection immediately.
+- With power saving enabled, output relayed through the proxy could be cut short when socktainer finished and closed its end of the connection: the proxy dropped whatever it hadn't yet passed on to the Docker client, so the tail end of a large response could go missing. The proxy now delivers everything before closing.
 
 ## [0.5.1] - 2026-10-12
 
@@ -106,7 +109,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/cap10morgan/whalebridge/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/cap10morgan/whalebridge/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/cap10morgan/whalebridge/compare/v0.3.1...v0.5.0
 [0.3.1]: https://github.com/cap10morgan/whalebridge/compare/v0.3.0...v0.3.1
