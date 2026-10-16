@@ -10,7 +10,30 @@ SPARKLE_FW="$ROOT/app/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos
 OUT="$ROOT/build/Whalebridge.app"
 # Releases pass VERSION from the tag; a bundle built from a bare git commit
 # identifies as that commit's short sha instead of masquerading as a release.
-VERSION="${VERSION:-$(git -C "$ROOT" rev-parse --short HEAD)}"
+#
+# Sparkle decides what's an update by comparing CFBundleVersion, though, and a
+# sha doesn't order: its comparator goes character class by character class,
+# so a sha that starts with a letter counts as older than every release (even
+# ones before it) and one that starts with a digit as newer than nearly any.
+# A git build's CFBundleVersion instead counts commits past the last release
+# tag, e.g. 0.6.0.3 for three commits after v0.6.0: newer than 0.6.0, older
+# than 0.6.1. Exactly at a tag, it's that release's version.
+if [[ -n "${VERSION:-}" ]]; then
+    BUNDLE_VERSION="$VERSION"
+else
+    VERSION="$(git -C "$ROOT" rev-parse --short HEAD)"
+    DESCRIBE="$(git -C "$ROOT" describe --tags --long --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)"
+    if [[ "$DESCRIBE" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-g[0-9a-f]+$ ]]; then
+        BUNDLE_VERSION="${BASH_REMATCH[1]}"
+        [[ "${BASH_REMATCH[2]}" == 0 ]] || BUNDLE_VERSION+=".${BASH_REMATCH[2]}"
+    else
+        # No release tag to count from (e.g. a shallow clone without tags):
+        # rank below every release, so the latest one is offered rather than
+        # leaving the order up to the sha's first character.
+        echo "warning: no vX.Y.Z tag reachable from HEAD; Sparkle will treat this build as older than any release" >&2
+        BUNDLE_VERSION="0"
+    fi
+fi
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 # Sparkle: where the app looks for updates, and the public half of the EdDSA key
 # whose private half lives in the release manager's login keychain. An empty
@@ -57,7 +80,7 @@ cat > "$OUT/Contents/Info.plist" <<EOF
     <key>CFBundleIconFile</key><string>Whalebridge</string>
     <key>CFBundleIconName</key><string>Whalebridge</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-    <key>CFBundleVersion</key><string>${VERSION}</string>
+    <key>CFBundleVersion</key><string>${BUNDLE_VERSION}</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>LSUIElement</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
