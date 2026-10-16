@@ -7,6 +7,9 @@ All notable changes to Whalebridge are documented in this file.
 ### Changed
 - A Whalebridge built from a git checkout (`make bundle`) now updates to the next release after the commit it was built from. Such builds still show the commit's short sha as their version, but tell Sparkle their place relative to releases: three commits past v0.6.0 ranks between 0.6.0 and 0.6.1, so it's offered 0.6.1 and later, never 0.6.0 or anything earlier. Before, Sparkle compared the sha itself, so whether a build was offered updates depended on its first character: a sha starting with a letter was offered any release, even ones older than the build, and one starting with a digit was effectively never offered one.
 
+### Fixed
+- `docker stats` given a short container ID prefix that matches more than one container now reports the ambiguous reference (HTTP 400), as other container commands do, instead of failing with a server error (socktainer#463).
+
 ## [0.6.0] - 2026-10-16
 
 ### Removed
