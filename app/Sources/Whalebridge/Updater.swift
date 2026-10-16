@@ -13,6 +13,10 @@ final class Updater: NSObject, ObservableObject {
     /// update controls rather than offering a check that can only fail.
     @Published private(set) var isConfigured = false
     @Published private(set) var canCheckForUpdates = false
+    /// When Sparkle last checked for updates, nil if it never has. Sparkle
+    /// doesn't make this observable, so it's re-read whenever a check cycle
+    /// ends and when Settings opens.
+    @Published private(set) var lastUpdateCheckDate: Date?
     @Published var automaticallyChecksForUpdates: Bool = true {
         didSet { controller?.updater.automaticallyChecksForUpdates = automaticallyChecksForUpdates }
     }
@@ -49,6 +53,11 @@ final class Updater: NSObject, ObservableObject {
         controller.updater.publisher(for: \.canCheckForUpdates)
             .assign(to: \.canCheckForUpdates, on: self)
             .store(in: &cancellables)
+        refreshLastUpdateCheckDate()
+    }
+
+    func refreshLastUpdateCheckDate() {
+        lastUpdateCheckDate = controller?.updater.lastUpdateCheckDate
     }
 
     func checkForUpdates() {
@@ -116,6 +125,7 @@ extension Updater: SPUUpdaterDelegate {
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        refreshLastUpdateCheckDate()
         // Our own probe answers only here, once its session is over: answering
         // from didFindValidUpdate would let this same callback land afterwards
         // and be mistaken for the user dismissing the update we then show.
