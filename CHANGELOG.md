@@ -4,6 +4,8 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-16
+
 ### Removed
 - Power saving. Its idle stop ran `container system stop`, which shut down every running container whenever the Docker API had been quiet for the timeout, and nothing started them again on wake. Restricting it to times when no containers are running would leave nothing worth saving: idle, with no containers, socktainer and Apple's container services together use about 0.2% of one CPU core, have no idle wakeups, and show an energy impact of 0.0–0.1. socktainer now listens on `~/.socktainer/container.sock` directly again instead of behind a proxy, and the setting, the idle timeout and the menu bar's sleeping state are gone. Installs that had power saving on need no action; Whalebridge clears the old settings and the proxy's leftover socket on launch. The local socket-path patch to socktainer, which only power saving used, is dropped too.
 
@@ -115,7 +117,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/cap10morgan/whalebridge/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/cap10morgan/whalebridge/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/cap10morgan/whalebridge/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/cap10morgan/whalebridge/compare/v0.3.1...v0.5.0
