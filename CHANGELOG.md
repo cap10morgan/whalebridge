@@ -7,6 +7,9 @@ All notable changes to Whalebridge are documented in this file.
 ### Removed
 - Power saving. Its idle stop ran `container system stop`, which shut down every running container whenever the Docker API had been quiet for the timeout, and nothing started them again on wake. Restricting it to times when no containers are running would leave nothing worth saving: idle, with no containers, socktainer and Apple's container services together use about 0.2% of one CPU core, have no idle wakeups, and show an energy impact of 0.0–0.1. socktainer now listens on `~/.socktainer/container.sock` directly again instead of behind a proxy, and the setting, the idle timeout and the menu bar's sleeping state are gone. Installs that had power saving on need no action; Whalebridge clears the old settings and the proxy's leftover socket on launch. The local socket-path patch to socktainer, which only power saving used, is dropped too.
 
+### Fixed
+- `docker stats` with no container arguments hung until some container started or stopped, and when it did run, every container's NAME showed as `--`. `docker stats <id>` also failed with "No such container" when given a container ID rather than its name. These are two socktainer bugs, now patched locally until the upstream fixes are released: `GET /events` held back its response headers until the first event (socktainer#462), and container stats only resolved names and left the name out of the response (socktainer#463).
+
 ## [0.5.2] - 2026-10-15
 
 ### Fixed
