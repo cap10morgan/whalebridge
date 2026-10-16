@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- `docker stats` given a short container ID prefix that matches more than one container now reports the ambiguous reference (HTTP 400), as other container commands do, instead of failing with a server error (socktainer#463).
+
 ## [0.6.0] - 2026-10-16
 
 ### Removed
