@@ -4,6 +4,8 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-16
+
 ### Changed
 - A Whalebridge built from a git checkout (`make bundle`) now updates to the next release after the commit it was built from. Such builds still show the commit's short sha as their version, but tell Sparkle their place relative to releases: three commits past v0.6.0 ranks between 0.6.0 and 0.6.1, so it's offered 0.6.1 and later, never 0.6.0 or anything earlier. Before, Sparkle compared the sha itself, so whether a build was offered updates depended on its first character: a sha starting with a letter was offered any release, even ones older than the build, and one starting with a digit was effectively never offered one.
 
@@ -123,7 +125,8 @@ Initial release.
 - CI on every push and pull request: app unit tests, socktainer's own test suite run against our patches, and a live integration job driving the real Docker API.
 - Tag-triggered release pipeline: build, sign, generate a Sparkle appcast, and publish a GitHub Release.
 
-[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/cap10morgan/whalebridge/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/cap10morgan/whalebridge/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/cap10morgan/whalebridge/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/cap10morgan/whalebridge/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/cap10morgan/whalebridge/compare/v0.5.0...v0.5.1
