@@ -4,6 +4,12 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Updated the bundled socktainer daemon to v1.5.4 (Apple's container runtime requirement is unchanged at 1.5.x). It brings upstream fixes for `docker inspect` always reporting `HostConfig.PortBindings` as `null` instead of the bindings the container was created with; a healthcheck probe that hangs past its timeout leaving the container `starting` for as long as it hung, instead of being recorded as a failure at the deadline; and containers owned by Apple Container plugins (`container k8s` cluster nodes, `container machine` VMs) showing up in `docker ps` and being removed by `docker container prune`. The `docker stats` and `GET /events` fixes that 0.6.0 and 0.6.1 patched in locally are now upstream, so those local patches are dropped.
+
+### Fixed
+- `docker compose up` without `-d` started every service as soon as it attached to it, in no particular order, so `depends_on` had no effect. Attached services also missed the setup the Docker API's start request does: other services couldn't reach them by service name, and their healthchecks never ran, so a `condition: service_healthy` dependency failed with "has no healthcheck configured". socktainer started a stopped container when a client attached to it, where Docker waits for the start request. Compose attaches to every service first and then starts each one in dependency order, but skipped those start requests because the services were already running. Fixed in socktainer v1.5.4 (socktainer#472, socktainer#474). `docker run`, `docker start -a` and `docker compose up -d` work as before.
+
 ## [0.6.1] - 2026-10-16
 
 ### Changed
