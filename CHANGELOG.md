@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- `docker compose up` without `-d` started every service as soon as it attached to it, in no particular order, so `depends_on` had no effect. Attached services also missed the setup the Docker API's start request does: other services couldn't reach them by service name, and their healthchecks never ran, so a `condition: service_healthy` dependency failed with "has no healthcheck configured". socktainer started a stopped container when a client attached to it, where Docker waits for the start request. Compose attaches to every service first and then starts each one in dependency order, but skipped those start requests because the services were already running. Now patched locally until the upstream fix is released (socktainer#472, socktainer#474). `docker run`, `docker start -a` and `docker compose up -d` work as before.
+
 ## [0.6.1] - 2026-10-16
 
 ### Changed

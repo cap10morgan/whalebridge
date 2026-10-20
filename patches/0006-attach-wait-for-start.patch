@@ -1,0 +1,757 @@
+diff --git a/Sources/socktainer/Clients/ClientContainerService.swift b/Sources/socktainer/Clients/ClientContainerService.swift
+index 0fe9179..532f12a 100644
+--- a/Sources/socktainer/Clients/ClientContainerService.swift
++++ b/Sources/socktainer/Clients/ClientContainerService.swift
+@@ -342,43 +342,72 @@ struct ClientContainerService: ClientContainerProtocol {
+     }
+ 
+     private func startInternal(container: ContainerSnapshot) async throws {
+-        let stdin: FileHandle? = nil
+-        let stdout: FileHandle? = nil
+-        let stderr: FileHandle? = nil
++        // A client that attached before this start (`docker run`, `docker start -a`, attached
++        // `docker compose up`) parked its pipes; boot with them so its stream gets the output.
++        // Claimed before anything can fail, so every failure below reaches the waiting attach.
++        let attached = await PendingAttachStart.shared.claim(containerId: container.id)
++        let stdio = attached?.stdioArray ?? [nil, nil, nil]
+ 
+-        let stdio = [stdin, stdout, stderr]
++        do {
++            try await prepareForStart(container: container)
++        } catch {
++            if let attached {
++                attached.closeAll()
++                await PendingAttachStart.shared.finish(containerId: container.id, result: .failure(error))
++            }
++            throw error
++        }
+ 
+-        try await prepareForStart(container: container)
++        let process: ClientProcess
++        do {
++            process = try await containerClient.withClient { try await $0.bootstrap(id: container.id, stdio: stdio) }
++        } catch {
++            if let attached {
++                attached.closeAll()
++                await PendingAttachStart.shared.finish(containerId: container.id, result: .failure(error))
++            }
++            // A container that is already booted was started by an earlier request.
++            if Self.isAlreadyStarted(error) { return }
++            throw error
++        }
+ 
+         do {
+-            let process = try await containerClient.withClient { try await $0.bootstrap(id: container.id, stdio: stdio) }
+             // Clear any exit code recorded by a previous run of this container so
+             // /wait blocks for the new init process rather than immediately
+             // returning the stale code (e.g. after a restart).
+             await ContainerExitCodeStore.shared.remove(id: container.id)
+             try await ExtraHostsFile.refresh(containerId: container.id)
+             try await process.start()
+-            // Wait for the init process in the background so we can capture its
+-            // real exit code without blocking the /start response.
+-            let containerId = container.id
+-            let exitLogger = Logger(label: "socktainer.exitcode")
+-            Task.detached {
+-                let code = await ContainerExitCodeStore.resolveExitCode(logger: exitLogger) {
+-                    try await process.wait()
+-                }
+-                await ContainerExitCodeStore.shared.set(id: containerId, code: code)
+-            }
+         } catch {
+-            // NOTE: If bootstrap fails because container is already booted,
+-            //       the attach handler may have already bootstrapped it
+-            let errorMessage = error.localizedDescription
+-            if errorMessage.contains("booted") || errorMessage.contains("expected to be in created state") {
+-                return
++            if let attached {
++                attached.closeAfterHandoff()
++                await PendingAttachStart.shared.finish(containerId: container.id, result: .failure(error))
+             }
+-
+-            // Re-throw any other errors
++            if Self.isAlreadyStarted(error) { return }
+             throw error
+         }
++
++        if attached != nil {
++            // The attach stream takes it from here, including recording the exit code.
++            await PendingAttachStart.shared.finish(containerId: container.id, result: .success(process))
++            return
++        }
++
++        // Wait for the init process in the background so we can capture its
++        // real exit code without blocking the /start response.
++        let containerId = container.id
++        let exitLogger = Logger(label: "socktainer.exitcode")
++        Task.detached {
++            let code = await ContainerExitCodeStore.resolveExitCode(logger: exitLogger) {
++                try await process.wait()
++            }
++            await ContainerExitCodeStore.shared.set(id: containerId, code: code)
++        }
++    }
++
++    private static func isAlreadyStarted(_ error: Error) -> Bool {
++        let errorMessage = error.localizedDescription
++        return errorMessage.contains("booted") || errorMessage.contains("expected to be in created state")
+     }
+ 
+     func stop(id: String, signal: String?, timeout: Int?) async throws {
+diff --git a/Sources/socktainer/Events/DieEventOwnership.swift b/Sources/socktainer/Events/DieEventOwnership.swift
+index 68f6d34..0cf0a82 100644
+--- a/Sources/socktainer/Events/DieEventOwnership.swift
++++ b/Sources/socktainer/Events/DieEventOwnership.swift
+@@ -2,12 +2,13 @@
+ ///
+ /// Two observers can watch the same exit:
+ /// - `ContainerStartRoute.observeExit`, armed when `POST /start` returns;
+-/// - `ContainerProcessExitMonitor`, which owns containers the attach route bootstrapped.
++/// - `ContainerProcessExitMonitor`, which watches the process of a container a client attached
++///   to before starting it (PendingAttachStart).
+ ///
+-/// `docker run` goes through both (attach, then start) and must produce a single `die`.
+-/// `docker compose up` attaches to a stopped container and never calls `/start`, so without
+-/// the monitor emitting the event nothing does — and Compose's `--abort-on-container-exit`
+-/// waits forever for an exit it can never observe.
++/// `docker run` and attached `docker compose up` go through both (attach, then start) and must
++/// produce a single `die`. The start route's observer only arms once `/start` returns, so a
++/// container that exits sooner is reported by the monitor or by nothing at all, and Compose's
++/// `--abort-on-container-exit` would wait forever for an exit it can never observe.
+ ///
+ /// Ownership is scoped to a *run*, identified by the epoch `beginRun` returns, and the winner
+ /// keeps it for the rest of that run: handing it back after broadcasting lets the loser — which
+diff --git a/Sources/socktainer/Routes/Containers/ContainerAttachRoute.swift b/Sources/socktainer/Routes/Containers/ContainerAttachRoute.swift
+index b89d374..f5ae2f3 100644
+--- a/Sources/socktainer/Routes/Containers/ContainerAttachRoute.swift
++++ b/Sources/socktainer/Routes/Containers/ContainerAttachRoute.swift
+@@ -290,6 +290,35 @@ extension ContainerAttachRoute {
+         )
+     }
+ 
++    /// Parks `pipes` for the container's next start, or fails when another client is already
++    /// attached and waiting for it: a container gets one set of stdio when it boots.
++    static func parkForStart(container: ContainerSnapshot, pipes: StdioPipes) async throws -> UUID {
++        guard let token = await PendingAttachStart.shared.park(containerId: container.id, pipes: pipes) else {
++            pipes.closeAll()
++            throw Abort(.conflict, reason: "Container \(container.id) already has a client attached and waiting for it to start")
++        }
++        return token
++    }
++
++    /// Returns once a write to `writer` fails, which is how a streaming body learns that its
++    /// client disconnected while there is nothing to send yet. An empty write never reaches the
++    /// socket, so the probe is an empty multiplexed-stream frame: a header announcing zero bytes,
++    /// which Docker's stdcopy demuxer skips. A TTY stream has no framing, so there is nothing
++    /// harmless to send and this only returns when cancelled.
++    static func untilWriteFails(_ writer: BodyStreamWriter, isTTY: Bool) async {
++        while !Task.isCancelled {
++            try? await Task.sleep(nanoseconds: 1_000_000_000)
++            guard !isTTY else { continue }
++            var probe = sharedAllocator.buffer(capacity: 8)
++            probe.writeBytes([DockerStreamFrame.StreamType.stdout.rawValue, 0, 0, 0, 0, 0, 0, 0])
++            do {
++                try await writer.write(.buffer(probe)).get()
++            } catch {
++                return
++            }
++        }
++    }
++
+     // Output-only attach for stopped containers (docker run without -i, issue #220).
+     // Uses pipes instead of log-file polling to eliminate the race for fast-exiting containers.
+     private static func attachStoppedOutputOnly(
+@@ -322,33 +351,9 @@ extension ContainerAttachRoute {
+         // our write end immediately so the container's stdin sees EOF.
+         try? pipes.stdin?.write.close()
+ 
+-        await ContainerExitCodeStore.shared.remove(id: container.id)
+-
+-        let process: ClientProcess
+-        do {
+-            process = try await ContainerClient().bootstrap(id: container.id, stdio: pipes.stdioArray)
+-        } catch {
+-            pipes.closeAll()
+-            await ContainerExitCodeStore.shared.set(id: container.id, code: -1)
+-            throw Abort(.internalServerError, reason: "Failed to bootstrap container: \(error.localizedDescription)")
+-        }
+-
+-        do {
+-            try await ExtraHostsFile.refresh(containerId: container.id)
+-            try await process.start()
+-        } catch {
+-            if !isBenignStartRace(error) {
+-                pipes.closeAfterHandoff()
+-                await ContainerExitCodeStore.shared.set(id: container.id, code: -1)
+-                throw Abort(.internalServerError, reason: "Failed to start container: \(error.localizedDescription)")
+-            }
+-        }
+-
+-        // The container is executing now: open a run so this exit's `die` is claimable.
+-        // `docker compose up` starts a service entirely through this path, never `POST /start`.
+-        let runEpoch = await DieEventOwnership.shared.beginRun(id: container.id)
+-
+-        await ProcessRegistry.shared.set(id: container.id, process: process)
++        // Docker holds the stream open until the container is started; `POST /start` boots it
++        // with these pipes (PendingAttachStart).
++        let token = try await parkForStart(container: container, pipes: pipes)
+ 
+         await broadcastAttach(
+             container: container,
+@@ -373,6 +378,15 @@ extension ContainerAttachRoute {
+                 defer { _ = writer.write(.end) }
+                 _ = writer.write(.buffer(sharedAllocator.buffer(capacity: 0)))
+ 
++                guard
++                    let process = await PendingAttachStart.awaitStart(
++                        containerId: container.id, token: token, pipes: pipes,
++                        clientGone: { await untilWriteFails(writer, isTTY: isTTY) })
++                else { return }
++                // Joins the run `POST /start` opened for this start.
++                let runEpoch = await DieEventOwnership.shared.beginRun(id: container.id)
++                await ProcessRegistry.shared.set(id: container.id, process: process)
++
+                 await withTaskGroup(of: Void.self) { group in
+                     // Process monitor — stdout/stderr write ends and stdin read are Apple-owned.
+                     group.addTask {
+@@ -484,40 +498,9 @@ extension ContainerAttachRoute {
+             throw Abort(.internalServerError, reason: "Failed to create stdio pipes")
+         }
+ 
+-        // Mirror ClientContainerService.start()'s exit-code contract: /wait returns
+-        // as soon as ContainerExitCodeStore is non-nil, so clear any stale code
+-        // before starting and record a synthetic one if bootstrap/start fails (so
+-        // /wait can't return a stale status or poll forever).
+-        await ContainerExitCodeStore.shared.remove(id: container.id)
+-
+-        let process: ClientProcess
+-        do {
+-            process = try await ContainerClient().bootstrap(id: container.id, stdio: pipes.stdioArray)
+-        } catch {
+-            pipes.closeAll()
+-            if isBenignStartRace(error) {
+-                throw Abort(.conflict, reason: "Container is already starting")
+-            }
+-            await ContainerExitCodeStore.shared.set(id: container.id, code: -1)
+-            throw Abort(.internalServerError, reason: "Failed to bootstrap container: \(error.localizedDescription)")
+-        }
+-
+-        do {
+-            try await ExtraHostsFile.refresh(containerId: container.id)
+-            try await process.start()
+-        } catch {
+-            pipes.closeAfterHandoff()
+-            if isBenignStartRace(error) {
+-                throw Abort(.conflict, reason: "Container is already starting")
+-            }
+-            await ContainerExitCodeStore.shared.set(id: container.id, code: -1)
+-            throw Abort(.internalServerError, reason: "Failed to start main process: \(error.localizedDescription)")
+-        }
+-
+-        // Executing now: open a run so this exit's `die` is claimable exactly once.
+-        let runEpoch = await DieEventOwnership.shared.beginRun(id: container.id)
+-
+-        await ProcessRegistry.shared.set(id: container.id, process: process)
++        // Docker holds the stream open until the container is started; `POST /start` boots it
++        // with these pipes (PendingAttachStart).
++        let token = try await parkForStart(container: container, pipes: pipes)
+ 
+         let broadcaster = req.application.storage[EventBroadcasterKey.self]
+         await broadcastAttach(
+@@ -534,6 +517,20 @@ extension ContainerAttachRoute {
+                 ttyEnabled: isTTY
+             ) { streamContinuation in
+ 
++                // Without an upgrade there is no cheap way to see the client leave before the
++                // start, so this waits for `/start` alone. The Docker CLI always upgrades.
++                guard
++                    let process = await PendingAttachStart.awaitStart(
++                        containerId: container.id, token: token, pipes: pipes,
++                        clientGone: { while !Task.isCancelled { try? await Task.sleep(nanoseconds: 1_000_000_000) } })
++                else {
++                    streamContinuation.finish()
++                    return
++                }
++                // Joins the run `POST /start` opened for this start.
++                let runEpoch = await DieEventOwnership.shared.beginRun(id: container.id)
++                await ProcessRegistry.shared.set(id: container.id, process: process)
++
+                 await withTaskGroup(of: Void.self) { group in
+                     // Process monitor - when process exits, close pipes and finish stream
+                     group.addTask {
+@@ -637,6 +634,18 @@ extension ContainerAttachRoute {
+             ttyEnabled: isTTY
+         ) { channel, tcpHandler in
+ 
++            guard
++                let process = await PendingAttachStart.awaitStart(
++                    containerId: container.id, token: token, pipes: pipes,
++                    clientGone: { try? await channel.closeFuture.get() })
++            else {
++                _ = try? await channel.close()
++                return
++            }
++            // Joins the run `POST /start` opened for this start.
++            let runEpoch = await DieEventOwnership.shared.beginRun(id: container.id)
++            await ProcessRegistry.shared.set(id: container.id, process: process)
++
+             tcpHandler.setStdinWriter(pipes.stdin!.write)
+ 
+             await withTaskGroup(of: Void.self) { group in
+diff --git a/Sources/socktainer/Routes/Containers/ContainerAttachWSRoute.swift b/Sources/socktainer/Routes/Containers/ContainerAttachWSRoute.swift
+index c5046b4..e4fd653 100644
+--- a/Sources/socktainer/Routes/Containers/ContainerAttachWSRoute.swift
++++ b/Sources/socktainer/Routes/Containers/ContainerAttachWSRoute.swift
+@@ -83,33 +83,23 @@ extension ContainerAttachWSRoute {
+             try? pipes.stdin?.write.close()
+         }
+ 
+-        await ContainerExitCodeStore.shared.remove(id: container.id)
+-
+-        let process: ClientProcess
+-        do {
+-            process = try await ContainerClient().bootstrap(id: container.id, stdio: pipes.stdioArray)
+-        } catch {
++        // Docker holds the attach open until the container is started; `POST /start` boots it
++        // with these pipes (PendingAttachStart).
++        guard let token = await PendingAttachStart.shared.park(containerId: container.id, pipes: pipes) else {
+             pipes.closeAll()
+-            await ContainerExitCodeStore.shared.set(id: container.id, code: -1)
+-            await ContainerExitCodeStore.shared.set(id: hexId, code: -1)
+-            try? await ws.close(code: .unexpectedServerError)
++            try? await ws.close(code: .policyViolation)
+             return
+         }
+-
+-        do {
+-            try await ExtraHostsFile.refresh(containerId: container.id)
+-            try await process.start()
+-        } catch {
+-            if !isBenignStartRace(error) {
+-                pipes.closeAfterHandoff()
+-                await ContainerExitCodeStore.shared.set(id: container.id, code: -1)
+-                await ContainerExitCodeStore.shared.set(id: hexId, code: -1)
+-                try? await ws.close(code: .unexpectedServerError)
+-                return
+-            }
++        guard
++            let process = await PendingAttachStart.awaitStart(
++                containerId: container.id, token: token, pipes: pipes,
++                clientGone: { try? await ws.onClose.get() })
++        else {
++            try? await ws.close(code: .unexpectedServerError)
++            return
+         }
+ 
+-        // Executing now: open a run so this exit's `die` is claimable exactly once.
++        // Joins the run `POST /start` opened for this start.
+         let runEpoch = await DieEventOwnership.shared.beginRun(id: container.id)
+ 
+         await ProcessRegistry.shared.set(id: container.id, process: process)
+diff --git a/Sources/socktainer/Utilities/ContainerProcessExitMonitor.swift b/Sources/socktainer/Utilities/ContainerProcessExitMonitor.swift
+index 6cfd6e7..83c8073 100644
+--- a/Sources/socktainer/Utilities/ContainerProcessExitMonitor.swift
++++ b/Sources/socktainer/Utilities/ContainerProcessExitMonitor.swift
+@@ -46,10 +46,9 @@ enum ContainerProcessExitMonitor {
+         await ContainerExitCodeStore.shared.set(id: nativeId, code: code)
+         await ContainerExitCodeStore.shared.set(id: hexId, code: code)
+ 
+-        // Emit `die` when no start-route observer owns this exit. The attach route bootstraps
+-        // stopped containers, which is how `docker compose up` starts a service: it never calls
+-        // `POST /start`, so nothing else would ever report the exit and Compose's
+-        // --abort-on-container-exit would wait forever.
++        // Emit `die` when no start-route observer owns this exit: a container that exits before
++        // the `POST /start` that started it has armed its observer, which would otherwise never
++        // be reported, leaving `docker wait` and Compose's --abort-on-container-exit blocked.
+         //
+         // The claim is deliberately not released after broadcasting: it stays held for the rest
+         // of this run so a start-route observer arriving moments later cannot take it and emit
+diff --git a/Sources/socktainer/Utilities/PendingAttachStart.swift b/Sources/socktainer/Utilities/PendingAttachStart.swift
+new file mode 100644
+index 0000000..351dfcb
+--- /dev/null
++++ b/Sources/socktainer/Utilities/PendingAttachStart.swift
+@@ -0,0 +1,169 @@
++import ContainerAPIClient
++import Foundation
++import Logging
++
++/// Holds the stdio of stopped containers that a client attached to before starting them.
++///
++/// Docker holds an attach to a container that is not running open until the container starts.
++/// `docker run` and `docker start -a` attach first and then send `POST /start`, and attached
++/// `docker compose up` attaches to every service and then starts each one, in dependency order,
++/// with `POST /start`. Apple Container takes a container's stdio when it boots, so the attach
++/// route cannot connect pipes to a container that `/start` boots later. Instead it parks its
++/// pipes here; `/start` boots the container with them and hands the started process back to
++/// the attach stream that is waiting for it.
++///
++/// The attach route must not boot the container itself. A booted container reports as running,
++/// and Compose skips `POST /start` for a running container, so every service would start at
++/// attach time, in no particular order, without `/start`'s DNS registration and healthcheck
++/// (socktainer/socktainer#472).
++///
++/// The pipes are parked before the response that streams them is sent, and the code that watches
++/// that client for a disconnect only runs once the stream starts. If the client goes away in
++/// between, or the TCP upgrade fails, nothing would ever release them. So the stream *adopts* its
++/// entry when it starts, `/start` only takes pipes that have been adopted, and an entry nobody
++/// adopts in time is released.
++actor PendingAttachStart {
++    static let shared = PendingAttachStart()
++
++    /// How long a parked entry may wait for its stream to adopt it. Streams adopt within
++    /// milliseconds; this only bounds an attach whose response never ran.
++    private let adoptionTimeoutNs: UInt64
++
++    init(adoptionTimeoutNs: UInt64 = 10_000_000_000) {
++        self.adoptionTimeoutNs = adoptionTimeoutNs
++    }
++
++    enum WaitError: Error {
++        /// The container was not started with the parked pipes: `/start` failed, or the client
++        /// disconnected first.
++        case notStarted
++    }
++
++    private struct Entry {
++        let token: UUID
++        let pipes: StdioPipes
++        var adopted = false
++        var adoptionWaiters: [CheckedContinuation<Void, Never>] = []
++        var claimed = false
++        var result: Result<ClientProcess, Error>?
++        var waiter: CheckedContinuation<ClientProcess, Error>?
++    }
++
++    private var entries: [String: Entry] = [:]
++    private let log = Logger(label: "socktainer.attach.pending")
++
++    /// Parks `pipes` until the container is started. Returns nil when another attach is already
++    /// waiting on the same container; Apple Container gives a container one set of stdio.
++    func park(containerId: String, pipes: StdioPipes) -> UUID? {
++        guard entries[containerId] == nil else { return nil }
++        let token = UUID()
++        entries[containerId] = Entry(token: token, pipes: pipes)
++        log.info("[attach] parked stdio for \(containerId) until it is started")
++        let timeout = adoptionTimeoutNs
++        Task {
++            try? await Task.sleep(nanoseconds: timeout)
++            await self.releaseIfUnadopted(containerId: containerId, token: token)
++        }
++        return token
++    }
++
++    /// Called by the attach stream once it is running and watching its client. False when the
++    /// entry is gone because nobody adopted it in time; its pipes are closed by then.
++    func adopt(containerId: String, token: UUID) -> Bool {
++        guard var entry = entries[containerId], entry.token == token else { return false }
++        entry.adopted = true
++        let waiters = entry.adoptionWaiters
++        entry.adoptionWaiters = []
++        entries[containerId] = entry
++        waiters.forEach { $0.resume() }
++        return true
++    }
++
++    private func releaseIfUnadopted(containerId: String, token: UUID) {
++        guard let entry = entries[containerId], entry.token == token, !entry.adopted, !entry.claimed else { return }
++        entries.removeValue(forKey: containerId)
++        entry.pipes.closeAll()
++        entry.adoptionWaiters.forEach { $0.resume() }
++        log.info("[attach] attach stream for \(containerId) never started; released its stdio")
++    }
++
++    /// Called by the start path before it boots the container. Returns the parked pipes, which
++    /// the caller then owns, or nil when no attach is waiting. A start that arrives before the
++    /// attach stream has adopted its entry waits for it, so the pipes only go to a container
++    /// whose output has a reader.
++    func claim(containerId: String) async -> StdioPipes? {
++        guard var entry = entries[containerId], !entry.claimed else { return nil }
++        if !entry.adopted {
++            let token = entry.token
++            await withCheckedContinuation { continuation in
++                entry.adoptionWaiters.append(continuation)
++                entries[containerId] = entry
++            }
++            guard let current = entries[containerId], current.token == token, current.adopted, !current.claimed else {
++                return nil
++            }
++            entry = current
++        }
++        entry.claimed = true
++        entries[containerId] = entry
++        return entry.pipes
++    }
++
++    /// Called by the start path once it has started the container with the claimed pipes, or
++    /// failed to. Hands the result to the waiting attach.
++    func finish(containerId: String, result: Result<ClientProcess, Error>) {
++        guard var entry = entries[containerId], entry.claimed else { return }
++        if let waiter = entry.waiter {
++            entries.removeValue(forKey: containerId)
++            waiter.resume(with: result)
++        } else {
++            entry.result = result
++            entries[containerId] = entry
++        }
++    }
++
++    /// Waits for the container to be started with the pipes parked under `token`.
++    func waitForStart(containerId: String, token: UUID) async throws -> ClientProcess {
++        guard var entry = entries[containerId], entry.token == token else { throw WaitError.notStarted }
++        if let result = entry.result {
++            entries.removeValue(forKey: containerId)
++            return try result.get()
++        }
++        return try await withCheckedThrowingContinuation { continuation in
++            entry.waiter = continuation
++            entries[containerId] = entry
++        }
++    }
++
++    /// Withdraws pipes parked under `token` because their client went away. True when they were
++    /// withdrawn before `/start` claimed them, in which case the caller still owns them and must
++    /// close them; false when `/start` already took them over, or they are gone.
++    func cancel(containerId: String, token: UUID) -> Bool {
++        guard let entry = entries[containerId], entry.token == token, !entry.claimed else { return false }
++        entries.removeValue(forKey: containerId)
++        entry.waiter?.resume(throwing: WaitError.notStarted)
++        entry.adoptionWaiters.forEach { $0.resume() }
++        log.info("[attach] client left before \(containerId) was started; released its stdio")
++        return true
++    }
++
++    /// Waits for `/start` to start the container with `pipes`, or for the client to go away
++    /// first, whichever happens first. `clientGone` returns once the client has disconnected.
++    /// Returns nil when the container was not started; the pipes are closed by then.
++    static func awaitStart(
++        containerId: String,
++        token: UUID,
++        pipes: StdioPipes,
++        clientGone: @escaping @Sendable () async -> Void
++    ) async -> ClientProcess? {
++        guard await shared.adopt(containerId: containerId, token: token) else { return nil }
++        let watcher = Task {
++            await clientGone()
++            if await shared.cancel(containerId: containerId, token: token) {
++                pipes.closeAll()
++            }
++        }
++        defer { watcher.cancel() }
++        return try? await shared.waitForStart(containerId: containerId, token: token)
++    }
++}
+diff --git a/Tests/socktainerTests/Utilities/PendingAttachStartTests.swift b/Tests/socktainerTests/Utilities/PendingAttachStartTests.swift
+new file mode 100644
+index 0000000..b9e7713
+--- /dev/null
++++ b/Tests/socktainerTests/Utilities/PendingAttachStartTests.swift
+@@ -0,0 +1,208 @@
++import ContainerAPIClient
++import ContainerizationOS
++import Foundation
++import Testing
++
++@testable import socktainer
++
++/// Regression tests for socktainer/socktainer#472: attaching to a stopped container used to boot
++/// and start it, so attached `docker compose up`, which attaches to every service before starting
++/// any, started them all at once and ignored `depends_on`. The attach route now parks its pipes in
++/// PendingAttachStart and `POST /start` boots the container with them.
++@Suite("PendingAttachStart")
++struct PendingAttachStartTests {
++
++    private func makePipes() throws -> StdioPipes {
++        try #require(StdioPipes.make(.all))
++    }
++
++    @Test("a start that finishes before the attach waits still reaches it")
++    func finishBeforeWait() async throws {
++        let registry = PendingAttachStart()
++        let pipes = try makePipes()
++        defer { pipes.closeAll() }
++        let token = try #require(await registry.park(containerId: "c1", pipes: pipes))
++        #expect(await registry.adopt(containerId: "c1", token: token))
++
++        #expect(await registry.claim(containerId: "c1") != nil)
++        await registry.finish(containerId: "c1", result: .success(StubProcess(id: "p1")))
++
++        let process = try await registry.waitForStart(containerId: "c1", token: token)
++        #expect(process.id == "p1")
++    }
++
++    @Test("an attach waiting for the start resumes once the start finishes")
++    func waitThenFinish() async throws {
++        let registry = PendingAttachStart()
++        let pipes = try makePipes()
++        defer { pipes.closeAll() }
++        let token = try #require(await registry.park(containerId: "c1", pipes: pipes))
++        #expect(await registry.adopt(containerId: "c1", token: token))
++
++        let waiter = Task { try await registry.waitForStart(containerId: "c1", token: token) }
++        try await Task.sleep(nanoseconds: 20_000_000)
++        #expect(await registry.claim(containerId: "c1") != nil)
++        await registry.finish(containerId: "c1", result: .success(StubProcess(id: "p2")))
++
++        #expect(try await waiter.value.id == "p2")
++    }
++
++    @Test("a failed start ends the waiting attach with an error")
++    func failedStart() async throws {
++        let registry = PendingAttachStart()
++        let pipes = try makePipes()
++        defer { pipes.closeAll() }
++        let token = try #require(await registry.park(containerId: "c1", pipes: pipes))
++        #expect(await registry.adopt(containerId: "c1", token: token))
++
++        let waiter = Task { try await registry.waitForStart(containerId: "c1", token: token) }
++        try await Task.sleep(nanoseconds: 20_000_000)
++        _ = await registry.claim(containerId: "c1")
++        await registry.finish(containerId: "c1", result: .failure(StubError()))
++
++        await #expect(throws: StubError.self) { try await waiter.value }
++    }
++
++    @Test("a client that leaves before the start gets its pipes back, and the start finds none")
++    func cancelBeforeClaim() async throws {
++        let registry = PendingAttachStart()
++        let pipes = try makePipes()
++        defer { pipes.closeAll() }
++        let token = try #require(await registry.park(containerId: "c1", pipes: pipes))
++
++        let waiter = Task { try await registry.waitForStart(containerId: "c1", token: token) }
++        try await Task.sleep(nanoseconds: 20_000_000)
++
++        #expect(await registry.cancel(containerId: "c1", token: token), "the caller owns the pipes and must close them")
++        await #expect(throws: PendingAttachStart.WaitError.self) { try await waiter.value }
++        #expect(await registry.claim(containerId: "c1") == nil, "a later start must not boot with a departed client's pipes")
++    }
++
++    @Test("a client that leaves once the start has taken its pipes does not get them back")
++    func cancelAfterClaim() async throws {
++        let registry = PendingAttachStart()
++        let pipes = try makePipes()
++        defer { pipes.closeAll() }
++        let token = try #require(await registry.park(containerId: "c1", pipes: pipes))
++        #expect(await registry.adopt(containerId: "c1", token: token))
++
++        #expect(await registry.claim(containerId: "c1") != nil)
++        #expect(await registry.cancel(containerId: "c1", token: token) == false, "the start path owns the pipes now")
++
++        await registry.finish(containerId: "c1", result: .success(StubProcess(id: "p3")))
++        #expect(try await registry.waitForStart(containerId: "c1", token: token).id == "p3")
++    }
++
++    @Test("a second attach to the same stopped container is refused")
++    func secondAttachRefused() async throws {
++        let registry = PendingAttachStart()
++        let first = try makePipes()
++        let second = try makePipes()
++        defer {
++            first.closeAll()
++            second.closeAll()
++        }
++
++        #expect(await registry.park(containerId: "c1", pipes: first) != nil)
++        #expect(await registry.park(containerId: "c1", pipes: second) == nil)
++        #expect(await registry.park(containerId: "c2", pipes: second) != nil, "other containers are unaffected")
++    }
++
++    @Test("pipes whose stream never started are released, and the container can be attached again")
++    func unadoptedEntryReleased() async throws {
++        let registry = PendingAttachStart(adoptionTimeoutNs: 50_000_000)
++        let pipes = try makePipes()
++        _ = try #require(await registry.park(containerId: "c1", pipes: pipes))
++
++        try await Task.sleep(nanoseconds: 200_000_000)
++
++        #expect(await registry.claim(containerId: "c1") == nil, "a start must not boot with pipes nobody reads")
++        let again = try makePipes()
++        defer { again.closeAll() }
++        #expect(await registry.park(containerId: "c1", pipes: again) != nil, "a new attach must not get 409")
++    }
++
++    @Test("a start that arrives before the stream adopts its pipes waits for it")
++    func claimWaitsForAdoption() async throws {
++        let registry = PendingAttachStart()
++        let pipes = try makePipes()
++        defer { pipes.closeAll() }
++        let token = try #require(await registry.park(containerId: "c1", pipes: pipes))
++
++        let claim = Task { await registry.claim(containerId: "c1") }
++        try await Task.sleep(nanoseconds: 20_000_000)
++        #expect(await registry.adopt(containerId: "c1", token: token))
++
++        #expect(await claim.value != nil)
++    }
++
++    @Test("a start waiting for adoption gets nothing when the entry is released instead")
++    func claimGivesUpWhenUnadopted() async throws {
++        let registry = PendingAttachStart(adoptionTimeoutNs: 50_000_000)
++        let pipes = try makePipes()
++        _ = try #require(await registry.park(containerId: "c1", pipes: pipes))
++
++        #expect(await registry.claim(containerId: "c1") == nil)
++    }
++
++    @Test("an adopted entry outlives the adoption timeout")
++    func adoptedEntryKept() async throws {
++        let registry = PendingAttachStart(adoptionTimeoutNs: 50_000_000)
++        let pipes = try makePipes()
++        defer { pipes.closeAll() }
++        let token = try #require(await registry.park(containerId: "c1", pipes: pipes))
++        #expect(await registry.adopt(containerId: "c1", token: token))
++
++        try await Task.sleep(nanoseconds: 200_000_000)
++
++        #expect(await registry.claim(containerId: "c1") != nil, "Compose can take minutes to start a dependent service")
++    }
++
++    @Test("a start with no attach waiting boots without parked pipes")
++    func claimWithoutAttach() async {
++        #expect(await PendingAttachStart().claim(containerId: "nobody-attached") == nil)
++    }
++
++    @Test("awaitStart releases the parked pipes when the client goes away first")
++    func awaitStartClientGone() async throws {
++        let id = "pending-attach-gone-\(UUID().uuidString.lowercased())"
++        let pipes = try makePipes()
++        let token = try #require(await PendingAttachStart.shared.park(containerId: id, pipes: pipes))
++
++        let process = await PendingAttachStart.awaitStart(containerId: id, token: token, pipes: pipes, clientGone: {})
++
++        // awaitStart closed the pipes it withdrew; a later start finds none to boot with.
++        #expect(process == nil)
++        #expect(await PendingAttachStart.shared.claim(containerId: id) == nil)
++    }
++
++    @Test("awaitStart returns the process once the container is started")
++    func awaitStartStarted() async throws {
++        let id = "pending-attach-started-\(UUID().uuidString.lowercased())"
++        let pipes = try makePipes()
++        defer { pipes.closeAll() }
++        let token = try #require(await PendingAttachStart.shared.park(containerId: id, pipes: pipes))
++
++        let starter = Task {
++            try await Task.sleep(nanoseconds: 20_000_000)
++            _ = await PendingAttachStart.shared.claim(containerId: id)
++            await PendingAttachStart.shared.finish(containerId: id, result: .success(StubProcess(id: "p4")))
++        }
++        let process = await PendingAttachStart.awaitStart(
++            containerId: id, token: token, pipes: pipes,
++            clientGone: { while !Task.isCancelled { try? await Task.sleep(nanoseconds: 10_000_000) } })
++        try await starter.value
++
++        #expect(process?.id == "p4")
++    }
++}
++
++private struct StubError: Error {}
++
++private struct StubProcess: ClientProcess {
++    let id: String
++    func start() async throws {}
++    func resize(_ size: Terminal.Size) async throws {}
++    func kill(_ signal: Int32) async throws {}
++    func wait() async throws -> Int32 { 0 }
++}
