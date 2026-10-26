@@ -1,7 +1,12 @@
 name: CI
 
 on:
+  # Only main: PR branches are covered by pull_request (which tests the merge
+  # with main), and an unfiltered push would run everything twice per PR
+  # commit, plus again on release tags. workflow_dispatch covers a branch
+  # that has no PR yet.
   push:
+    branches: [main]
     paths-ignore: &non-app-paths
       - "site/**"
       - "assets/**"
@@ -12,6 +17,7 @@ on:
       - ".github/workflows/pages.yml"
   pull_request:
     paths-ignore: *non-app-paths
+  workflow_dispatch:
 
 jobs:
   # Build the app package and run its tests.
