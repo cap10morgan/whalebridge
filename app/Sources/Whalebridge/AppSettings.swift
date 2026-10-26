@@ -130,6 +130,13 @@ struct SettingsView: View {
                         isOn: $updater.automaticallyChecksForUpdates)
                     Button("Check for Updates…") { updater.checkForUpdates() }
                         .disabled(!updater.canCheckForUpdates)
+                    LabeledContent("Last checked") {
+                        if let date = updater.lastUpdateCheckDate {
+                            Text(date.formatted(date: .abbreviated, time: .shortened))
+                        } else {
+                            Text("Never")
+                        }
+                    }
                 }
             }
         }
@@ -137,6 +144,7 @@ struct SettingsView: View {
         .frame(width: 420)
         .onAppear {
             settings.refresh()
+            updater.refreshLastUpdateCheckDate()
             NSApp.activate(ignoringOtherApps: true)
             NSApp.keyWindow?.orderFrontRegardless()
         }

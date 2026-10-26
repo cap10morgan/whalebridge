@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Settings now shows when Whalebridge last checked for updates, under the update controls.
+
 ### Changed
 - Whalebridge now requires Apple's container runtime 1.6.x. A Whalebridge with 1.5.x installed reports it as too old and offers to download and install Apple's signed 1.6 installer, as it does for any outdated runtime. Once 1.6 is installed, Whalebridge restarts Apple's container services, which stops any running containers; start them again afterwards. Existing containers, images and volumes are kept. The bundled socktainer daemon must match the runtime, so the two have to be upgraded together: a socktainer built for 1.5 fails `docker run --add-host` on 1.6.
 - Updated the bundled socktainer daemon to v1.6.0, built against Apple's container runtime 1.6.0. The BuildKit container that `docker build` uses is now set up by Apple's own builder code. A builder created under an earlier runtime is replaced with the current builder image the next time it has to be started, instead of being kept indefinitely. The release also includes the v1.5.4 fixes: upstream fixes for `docker inspect` always reporting `HostConfig.PortBindings` as `null` instead of the bindings the container was created with; a healthcheck probe that hangs past its timeout leaving the container `starting` for as long as it hung, instead of being recorded as a failure at the deadline; and containers owned by Apple Container plugins (`container k8s` cluster nodes, `container machine` VMs) showing up in `docker ps` and being removed by `docker container prune`. The `docker stats` and `GET /events` fixes that 0.6.0 and 0.6.1 patched in locally are now upstream, so those local patches are dropped.
