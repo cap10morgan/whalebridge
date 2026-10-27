@@ -4,6 +4,9 @@ All notable changes to Whalebridge are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- The About window now shows when Whalebridge last checked for updates, under its Check for Updates… button, as Settings does.
+
 ## [0.7.0] - 2026-10-27
 
 ### Added
