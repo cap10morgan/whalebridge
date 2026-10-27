@@ -130,13 +130,7 @@ struct SettingsView: View {
                         isOn: $updater.automaticallyChecksForUpdates)
                     Button("Check for Updates…") { updater.checkForUpdates() }
                         .disabled(!updater.canCheckForUpdates)
-                    LabeledContent("Last checked") {
-                        if let date = updater.lastUpdateCheckDate {
-                            Text(date.formatted(date: .abbreviated, time: .shortened))
-                        } else {
-                            Text("Never")
-                        }
-                    }
+                    LabeledContent("Last checked", value: updater.lastUpdateCheckText)
                 }
             }
         }

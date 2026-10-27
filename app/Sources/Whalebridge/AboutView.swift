@@ -19,13 +19,20 @@ struct AboutView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack {
-                Button("GitHub") {
-                    NSWorkspace.shared.open(URL(string: "https://github.com/cap10morgan/whalebridge")!)
+            VStack(spacing: 6) {
+                HStack {
+                    Button("GitHub") {
+                        NSWorkspace.shared.open(URL(string: "https://github.com/cap10morgan/whalebridge")!)
+                    }
+                    if updater.isConfigured {
+                        Button("Check for Updates…") { updater.checkForUpdates() }
+                            .disabled(!updater.canCheckForUpdates)
+                    }
                 }
                 if updater.isConfigured {
-                    Button("Check for Updates…") { updater.checkForUpdates() }
-                        .disabled(!updater.canCheckForUpdates)
+                    Text("Last checked: \(updater.lastUpdateCheckText)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -44,6 +51,7 @@ struct AboutView: View {
         .padding(24)
         .frame(width: 280)
         .onAppear {
+            updater.refreshLastUpdateCheckDate()
             NSApp.activate(ignoringOtherApps: true)
             NSApp.keyWindow?.orderFrontRegardless()
         }

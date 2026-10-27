@@ -15,7 +15,7 @@ final class Updater: NSObject, ObservableObject {
     @Published private(set) var canCheckForUpdates = false
     /// When Sparkle last checked for updates, nil if it never has. Sparkle
     /// doesn't make this observable, so it's re-read whenever a check cycle
-    /// ends and when Settings opens.
+    /// ends and when Settings or About opens.
     @Published private(set) var lastUpdateCheckDate: Date?
     @Published var automaticallyChecksForUpdates: Bool = true {
         didSet { controller?.updater.automaticallyChecksForUpdates = automaticallyChecksForUpdates }
@@ -58,6 +58,11 @@ final class Updater: NSObject, ObservableObject {
 
     func refreshLastUpdateCheckDate() {
         lastUpdateCheckDate = controller?.updater.lastUpdateCheckDate
+    }
+
+    /// `lastUpdateCheckDate` as Settings and About show it.
+    var lastUpdateCheckText: String {
+        lastUpdateCheckDate?.formatted(date: .abbreviated, time: .shortened) ?? "Never"
     }
 
     func checkForUpdates() {
