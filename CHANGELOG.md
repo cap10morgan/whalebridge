@@ -13,6 +13,7 @@ All notable changes to Whalebridge are documented in this file.
 
 ### Fixed
 - `docker compose up` without `-d` started every service as soon as it attached to it, in no particular order, so `depends_on` had no effect. Attached services also missed the setup the Docker API's start request does: other services couldn't reach them by service name, and their healthchecks never ran, so a `condition: service_healthy` dependency failed with "has no healthcheck configured". socktainer started a stopped container when a client attached to it, where Docker waits for the start request. Compose attaches to every service first and then starts each one in dependency order, but skipped those start requests because the services were already running. Fixed in socktainer v1.5.4 (socktainer#472, socktainer#474). `docker run`, `docker start -a` and `docker compose up -d` work as before.
+- `docker build -q` hung on any build with a `RUN` step, printing nothing until interrupted. socktainer passed `-q` through to Apple's builder code, whose quiet mode stalls the build at its first output (apple/container#2387). The builder now always runs normally, and `-q` instead applies to what the build sends back, as with Docker: a quiet build prints only the image ID, so `id=$(docker build -q .)` works. Before, the builds that did finish under `-q` printed all of their progress lines too. Patched locally until socktainer#486 is released.
 
 ## [0.6.1] - 2026-10-16
 
