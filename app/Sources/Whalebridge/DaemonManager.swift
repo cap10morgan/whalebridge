@@ -418,12 +418,34 @@ final class DaemonManager: ObservableObject {
     /// that reports the default kernel, so check for its file in the
     /// apiserver's app root.
     nonisolated static func defaultKernelPath(statusOutput: String, architecture: String) -> String? {
+        appRoot(statusOutput: statusOutput)?.appending(path: "kernels/default.kernel-\(architecture)").path
+    }
+
+    /// The apiserver's app root, from the `paths.appRoot` row of `container
+    /// system status`. A stopped apiserver reports no paths.
+    nonisolated static func appRoot(statusOutput: String) -> URL? {
         guard let line = statusOutput.split(separator: "\n").first(where: { $0.hasPrefix("paths.appRoot") }) else {
             return nil
         }
         let appRoot = line.dropFirst("paths.appRoot".count).trimmingCharacters(in: .whitespaces)
         guard !appRoot.isEmpty else { return nil }
-        return URL(fileURLWithPath: appRoot).appending(path: "kernels/default.kernel-\(architecture)").path
+        return URL(fileURLWithPath: appRoot, isDirectory: true)
+    }
+
+    /// apple/container's default app root, for when the apiserver isn't
+    /// running to report its own.
+    nonisolated static let defaultAppRoot = FileManager.default.homeDirectoryForCurrentUser
+        .appending(path: "Library/Application Support/com.apple.container", directoryHint: .isDirectory)
+
+    /// Where Apple's container runtime keeps its data: the running apiserver's
+    /// app root, or the default one when it isn't running.
+    func containerAppRoot() async -> URL {
+        guard containerCLIInstalled else { return Self.defaultAppRoot }
+        let status = await Shell.run(containerCLI, ["system", "status"])
+        guard status.status == 0, let root = Self.appRoot(statusOutput: status.output) else {
+            return Self.defaultAppRoot
+        }
+        return root
     }
 
     private func ensureDefaultKernel() async {

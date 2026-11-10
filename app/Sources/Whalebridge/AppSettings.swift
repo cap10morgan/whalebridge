@@ -25,6 +25,12 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// Whether Time Machine skips Apple's recreatable container storage. Read
+    /// from the directories themselves (see BackupExclusion), not stored.
+    @Published private(set) var timeMachineExclusion: BackupExclusion.State = .unavailable
+    @Published private(set) var timeMachineExclusionError: String?
+    private var containerStorageDirectories: [URL] = []
+
     private let firstRunLoginItemKey = "didFirstRunLoginItem"
     private let defaultContainerMemoryPercentKey = "defaultContainerMemoryPercent"
     /// Settings from the since-removed power saving mode, cleared on launch
@@ -62,6 +68,25 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// Re-read rather than trusting our last write: the runtime creates the
+    /// directories after a fresh install, and `tmutil` can change them too.
+    func refreshTimeMachineExclusion() async {
+        let appRoot = await DaemonManager.shared.containerAppRoot()
+        containerStorageDirectories = BackupExclusion.directories(appRoot: appRoot)
+        timeMachineExclusion = BackupExclusion.state(of: containerStorageDirectories)
+    }
+
+    func setExcludeFromTimeMachine(_ excluded: Bool) {
+        do {
+            try BackupExclusion.setExcluded(excluded, directories: containerStorageDirectories)
+            timeMachineExclusionError = nil
+        } catch {
+            timeMachineExclusionError = error.localizedDescription
+            NSLog("failed to \(excluded ? "exclude" : "include") container storage in Time Machine: \(error)")
+        }
+        timeMachineExclusion = BackupExclusion.state(of: containerStorageDirectories)
+    }
+
     private func apply(launchAtLogin enabled: Bool) {
         guard canManageLoginItem else { return }
         do {
@@ -90,6 +115,15 @@ struct SettingsView: View {
             format: "%.0f%% of this Mac's %.0f GB (%.0f GB) for containers that don't set their own limit."
                 + " Applies the next time Whalebridge starts.",
             settings.defaultContainerMemoryPercent, totalGB, limitGB)
+    }
+
+    private var timeMachineCaption: String {
+        if settings.timeMachineExclusion == .unavailable {
+            return "Available once Apple's container runtime has created its storage."
+        }
+        return "Skips container filesystems and unpacked image layers, which can take many GB."
+            + " Images and volumes are still backed up, but changes made inside a container"
+            + " outside its volumes won't be restored."
     }
 
     var body: some View {
@@ -123,6 +157,25 @@ struct SettingsView: View {
                 }
             }
 
+            Section {
+                Toggle(
+                    "Exclude container storage from Time Machine",
+                    isOn: Binding(
+                        get: { settings.timeMachineExclusion == .excluded },
+                        set: { settings.setExcludeFromTimeMachine($0) }
+                    )
+                )
+                .disabled(settings.timeMachineExclusion == .unavailable)
+                Text(timeMachineCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let error = settings.timeMachineExclusionError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
             if updater.isConfigured {
                 Section {
                     Toggle(
@@ -136,6 +189,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 420)
+        .task { await settings.refreshTimeMachineExclusion() }
         .onAppear {
             settings.refresh()
             updater.refreshLastUpdateCheckDate()

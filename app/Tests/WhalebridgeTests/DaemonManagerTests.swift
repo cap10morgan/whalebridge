@@ -64,3 +64,21 @@ import Testing
         #expect(DaemonManager.defaultKernelPath(statusOutput: "paths.appRoot       ", architecture: "arm64") == nil)
     }
 }
+
+/// `appRoot` reads where apple/container keeps its data from `container
+/// system status`, for the Time Machine setting as well as the kernel check.
+@Suite struct AppRootTests {
+    @Test func readsAppRootFromStatusOutput() {
+        let output = """
+            status              running
+            paths.appRoot       /Users/me/Library/Application Support/com.apple.container/
+            """
+        #expect(
+            DaemonManager.appRoot(statusOutput: output)?.appending(path: "snapshots").path
+                == "/Users/me/Library/Application Support/com.apple.container/snapshots")
+    }
+
+    @Test func stoppedApiserverReportsNoAppRoot() {
+        #expect(DaemonManager.appRoot(statusOutput: "apiserver is not running and not registered with launchd") == nil)
+    }
+}
