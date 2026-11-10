@@ -13,13 +13,18 @@ SOCKTAINER_BASE_VERSION = $(shell git -C vendor/socktainer describe --tags --exa
 SOCKTAINER_VERSION = $(SOCKTAINER_BASE_VERSION)-wb$(WB_REVISION)
 
 # Reset the submodule to its pinned tag, then apply our patches (see patches/)
-# so the vendor tree never carries hand edits between builds.
-.PHONY: daemon
-daemon:
+# so the vendor tree never carries hand edits between builds. Anything that
+# reads the vendored Package.swift (the required apple/container version)
+# must run this first, since a patch can move that pin.
+.PHONY: patch
+patch:
 	git submodule update --init
 	git -C vendor/socktainer checkout -- .
 	git -C vendor/socktainer clean -fd
 	set -e; for p in $(ROOT)/patches/*.patch; do git -C vendor/socktainer apply "$$p"; done
+
+.PHONY: daemon
+daemon: patch
 	# Tags aren't fetched by `submodule update` (CI checkouts especially), and
 	# the release-vs-sha distinction above needs them; offline is fine — the
 	# sha fallback still applies.
