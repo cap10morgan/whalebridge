@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import Whalebridge
@@ -40,27 +41,71 @@ import Testing
     }
 }
 
-/// `defaultKernelPath` finds where apple/container keeps its default kernel
-/// from `container system status` output, since there's no command that
-/// reports the kernel itself.
+/// `defaultKernelPath` finds the default-kernel symlink in the app root that
+/// `container system status` reports, since there's no command that reports
+/// the kernel itself.
 @Suite struct DefaultKernelPathTests {
-    @Test func readsAppRootFromStatusOutput() {
-        let output = """
-            FIELD               VALUE
-            status              running
-            paths.appRoot       /Users/me/Library/Application Support/com.apple.container/
-            paths.installRoot   /usr/local/
-            """
+    @Test func isTheArchitecturesSymlinkUnderKernels() {
+        let appRoot = URL(fileURLWithPath: "/Users/me/Library/Application Support/com.apple.container/", isDirectory: true)
         #expect(
-            DaemonManager.defaultKernelPath(statusOutput: output, architecture: "arm64")
+            DaemonManager.defaultKernelPath(appRoot: appRoot)
                 == "/Users/me/Library/Application Support/com.apple.container/kernels/default.kernel-arm64")
     }
+}
 
-    @Test func missingAppRootReturnsNil() {
-        #expect(DaemonManager.defaultKernelPath(statusOutput: "status  running", architecture: "arm64") == nil)
+/// `appRoot` reads where apple/container keeps its data from `container
+/// system status`, for the Time Machine setting as well as the kernel check.
+@Suite struct AppRootTests {
+    @Test func readsAppRootFromStatusOutput() {
+        let output = """
+            status              running
+            paths.appRoot       /Users/me/Library/Application Support/com.apple.container/
+            """
+        #expect(
+            DaemonManager.appRoot(statusOutput: output)?.appending(path: "snapshots").path
+                == "/Users/me/Library/Application Support/com.apple.container/snapshots")
     }
 
-    @Test func emptyAppRootReturnsNil() {
-        #expect(DaemonManager.defaultKernelPath(statusOutput: "paths.appRoot       ", architecture: "arm64") == nil)
+    @Test func missingOrEmptyAppRootRowGivesNil() {
+        #expect(DaemonManager.appRoot(statusOutput: "status  running") == nil)
+        #expect(DaemonManager.appRoot(statusOutput: "paths.appRoot       ") == nil)
+    }
+
+    @Test func stoppedApiserverReportsNoAppRoot() {
+        #expect(DaemonManager.appRoot(statusOutput: "apiserver is not running and not registered with launchd") == nil)
+    }
+}
+
+/// After a runtime upgrade, Whalebridge moves the default kernel to the new
+/// recommended one only when it's still a kernel an earlier runtime
+/// recommended, which it tells from the default-kernel symlink's target.
+@Suite struct OutdatedKernelTests {
+    let directory: URL
+
+    init() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appending(path: "OutdatedKernelTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    @Test func readsTheKernelTheDefaultSymlinkPointsTo() throws {
+        let kernel = directory.appending(path: "vmlinux-6.18.35-197-debug")
+        try Data().write(to: kernel)
+        let link = directory.appending(path: "default.kernel-arm64")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: kernel)
+        #expect(DaemonManager.kernelName(linkedFrom: link.path) == "vmlinux-6.18.35-197-debug")
+    }
+
+    @Test func noSymlinkMeansNoKernelName() throws {
+        #expect(DaemonManager.kernelName(linkedFrom: directory.appending(path: "default.kernel-arm64").path) == nil)
+        let plainFile = directory.appending(path: "default.kernel-arm64")
+        try Data().write(to: plainFile)
+        #expect(DaemonManager.kernelName(linkedFrom: plainFile.path) == nil)
+    }
+
+    @Test func earlierRecommendedKernelsExcludeTheCurrentOne() {
+        #expect(!DaemonManager.earlierRecommendedKernels.contains(DaemonManager.recommendedKernel))
+        // 1.6's recommendation is outdated under 1.7.
+        #expect(DaemonManager.earlierRecommendedKernels.contains("vmlinux-6.18.35-197-debug"))
     }
 }

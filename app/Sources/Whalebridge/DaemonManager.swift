@@ -65,10 +65,14 @@ final class DaemonManager: ObservableObject {
     @Published private(set) var installProgress: String?
     @Published private(set) var installError: String?
     @Published private(set) var isDefaultContext = DockerContext.isDefault
+    /// True while the recommended kernel downloads after a runtime upgrade.
+    @Published private(set) var kernelUpdateInProgress = false
 
     private let previousContextKey = "previousDockerContext"
     private let firstRunContextKey = "didFirstRunContextSetup"
     private let verifiedApiserverVersionKey = "verifiedApiserverVersion"
+    private let kernelCheckedVersionKey = "recommendedKernelCheckedVersion"
+    private var kernelUpdate: (id: UUID, task: Task<Void, Never>)?
     private var offeredInstallThisLaunch = false
     private(set) var isTerminating = false
 
@@ -270,7 +274,8 @@ final class DaemonManager: ObservableObject {
         } else if !apiserverRunning {
             await startApiserver()
         }
-        await ensureDefaultKernel()
+        let kernelPath = await runningDefaultKernelPath()
+        if let kernelPath { await ensureDefaultKernel(at: kernelPath) }
 
         let daemon = Process()
         daemon.executableURL = daemonURL
@@ -280,7 +285,7 @@ final class DaemonManager: ObservableObject {
             "SOCKTAINER_PLATFORM_NAME": "Whalebridge",
             "SOCKTAINER_PLATFORM_VERSION": AppVersion.current,
             // Default memory limit for containers that don't request their own
-            // (patches/0002-create-conflict-and-default-memory.patch),
+            // (patches/0002-default-memory-percent.patch),
             // configurable in Settings.
             "SOCKTAINER_DEFAULT_MEMORY_PERCENT": "\(AppSettings.shared.defaultContainerMemoryPercent)",
         ]
@@ -310,6 +315,7 @@ final class DaemonManager: ObservableObject {
         // stop() or an early daemon exit may have moved us on while we waited.
         guard state == .starting else { return }
         state = .running
+        if let kernelPath { updateOutdatedKernel(at: kernelPath, runtimeVersion: version) }
         try? DockerContext.ensureContext(socketPath: socketPath)
         performFirstRunContextSetup()
     }
@@ -385,6 +391,7 @@ final class DaemonManager: ObservableObject {
 
     func stop() {
         stopRequested = true
+        cancelKernelUpdate()
         relaunchTask?.cancel()
         relaunchTask = nil
         relaunchAttempts = 0
@@ -410,27 +417,57 @@ final class DaemonManager: ObservableObject {
         await refreshApiserverStatus()
     }
 
-    /// Installs Apple's recommended default kernel when none is configured.
-    /// `startApiserver` covers this for services we start ourselves, but the
-    /// apiserver may already be running without one (started from a shell,
-    /// or by an older Whalebridge), and then every container create fails
-    /// with "default kernel not configured". apple/container has no command
-    /// that reports the default kernel, so check for its file in the
-    /// apiserver's app root.
-    nonisolated static func defaultKernelPath(statusOutput: String, architecture: String) -> String? {
+    /// The kernel architecture apple/container runs on this Mac.
+    nonisolated static let kernelArchitecture = "arm64"
+
+    /// The default-kernel symlink in an app root. apple/container has no
+    /// command that reports the default kernel, so Whalebridge looks here.
+    nonisolated static func defaultKernelPath(appRoot: URL) -> String {
+        appRoot.appending(path: "kernels/default.kernel-\(kernelArchitecture)").path
+    }
+
+    /// The apiserver's app root, from the `paths.appRoot` row of `container
+    /// system status`. A stopped apiserver reports no paths.
+    nonisolated static func appRoot(statusOutput: String) -> URL? {
         guard let line = statusOutput.split(separator: "\n").first(where: { $0.hasPrefix("paths.appRoot") }) else {
             return nil
         }
         let appRoot = line.dropFirst("paths.appRoot".count).trimmingCharacters(in: .whitespaces)
         guard !appRoot.isEmpty else { return nil }
-        return URL(fileURLWithPath: appRoot).appending(path: "kernels/default.kernel-\(architecture)").path
+        return URL(fileURLWithPath: appRoot, isDirectory: true)
     }
 
-    private func ensureDefaultKernel() async {
+    /// apple/container's default app root, for when the apiserver isn't
+    /// running to report its own.
+    nonisolated static let defaultAppRoot = FileManager.default.homeDirectoryForCurrentUser
+        .appending(path: "Library/Application Support/com.apple.container", directoryHint: .isDirectory)
+
+    /// The running apiserver's app root, or nil when it isn't answering.
+    private func runningAppRoot() async -> URL? {
+        guard containerCLIInstalled else { return nil }
         let status = await Shell.run(containerCLI, ["system", "status"])
-        guard status.status == 0,
-            let path = DaemonManager.defaultKernelPath(statusOutput: status.output, architecture: "arm64")
-        else { return }
+        guard status.status == 0 else { return nil }
+        return Self.appRoot(statusOutput: status.output)
+    }
+
+    /// Where Apple's container runtime keeps its data: the running apiserver's
+    /// app root, or the default one when it isn't running.
+    func containerAppRoot() async -> URL {
+        await runningAppRoot() ?? Self.defaultAppRoot
+    }
+
+    /// The running apiserver's default-kernel symlink, or nil when it isn't
+    /// answering.
+    private func runningDefaultKernelPath() async -> String? {
+        await runningAppRoot().map(Self.defaultKernelPath(appRoot:))
+    }
+
+    /// Installs Apple's recommended default kernel when none is configured.
+    /// `startApiserver` covers this for services we start ourselves, but the
+    /// apiserver may already be running without one (started from a shell,
+    /// or by an older Whalebridge), and then every container create fails
+    /// with "default kernel not configured".
+    private func ensureDefaultKernel(at path: String) async {
         guard !FileManager.default.fileExists(atPath: path) else { return }
         NSLog("no default kernel configured — installing the recommended one")
         let result = await Shell.run(containerCLI, ["system", "kernel", "set", "--recommended"])
@@ -439,10 +476,89 @@ final class DaemonManager: ObservableObject {
         }
     }
 
+    /// The kernel the required apple/container release recommends: the file
+    /// name `container system kernel set --recommended` installs, from
+    /// `KernelConfig.defaultBinaryPath`. bundle.sh fails the build when the
+    /// vendored apple/container recommends a different one; then add this one
+    /// to `earlierRecommendedKernels` and replace it with the new one.
+    nonisolated static let recommendedKernel = "vmlinux-6.18.56-208-debug"
+
+    /// Default kernels that earlier apple/container releases recommended.
+    nonisolated static let earlierRecommendedKernels: Set<String> = [
+        "vmlinux-6.12.28-153",  // 0.1–0.8
+        "vmlinux-6.18.5-177",  // 0.9–0.11
+        "vmlinux-6.18.15-186",  // 0.12–1.2
+        "vmlinux-6.18.35-197-debug",  // 1.3–1.6
+    ]
+
+    /// The file name of the kernel the default-kernel symlink at `path` points
+    /// to, or nil when there's no symlink there.
+    nonisolated static func kernelName(linkedFrom path: String) -> String? {
+        guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: path) else { return nil }
+        return URL(fileURLWithPath: target).lastPathComponent
+    }
+
+    /// Moves the default kernel to the one the installed runtime recommends,
+    /// when it's still one an earlier runtime recommended. Upgrading the
+    /// runtime doesn't: `system start` only installs a kernel when none is
+    /// configured, so upgraded installs kept booting new containers on the old
+    /// one. A kernel set any other way is left alone.
+    ///
+    /// Checked once per runtime version, so a kernel set back by hand stays
+    /// until the next upgrade. Runs after the daemon is up because the
+    /// download is several hundred MB; until it finishes, new containers boot
+    /// the old kernel. Existing containers keep the kernel they were created
+    /// with: they record its file, which stays in place.
+    private func updateOutdatedKernel(at path: String, runtimeVersion: String) {
+        guard kernelUpdate == nil,
+            UserDefaults.standard.string(forKey: kernelCheckedVersionKey) != runtimeVersion
+        else { return }
+        let id = UUID()
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.finishKernelUpdate(id) }
+            if let name = DaemonManager.kernelName(linkedFrom: path),
+                DaemonManager.earlierRecommendedKernels.contains(name)
+            {
+                NSLog("default kernel \(name) is one an earlier runtime recommended — installing \(runtimeVersion)'s")
+                self.kernelUpdateInProgress = true
+                // --force: the recommended kernel's file may already be there
+                // without being the default, and installing over it would fail.
+                let result = await Shell.run(
+                    self.containerCLI, ["system", "kernel", "set", "--recommended", "--force"])
+                // Cancelled (Whalebridge or the apiserver stopping) or failed:
+                // left unchecked, so the next start tries again.
+                guard !Task.isCancelled else { return }
+                guard result.status == 0 else {
+                    NSLog("container system kernel set exited \(result.status): \(result.output)")
+                    return
+                }
+            }
+            UserDefaults.standard.set(runtimeVersion, forKey: self.kernelCheckedVersionKey)
+        }
+        kernelUpdate = (id, task)
+    }
+
+    /// Clears the update's state, unless a newer update has replaced it.
+    private func finishKernelUpdate(_ id: UUID) {
+        guard kernelUpdate?.id == id else { return }
+        kernelUpdate = nil
+        kernelUpdateInProgress = false
+    }
+
+    /// Stops an update in progress: its download needs the apiserver, and a
+    /// stopped Whalebridge shouldn't show one. The next start begins again.
+    private func cancelKernelUpdate() {
+        kernelUpdate?.task.cancel()
+        kernelUpdate = nil
+        kernelUpdateInProgress = false
+    }
+
     /// `container system stop` on an already-stopped service is a harmless
     /// no-op, so this is safe to call whenever the running apiserver's
     /// version is in doubt.
     private func stopApiserver() async {
+        cancelKernelUpdate()
         apiserverTransitioning = true
         defer { apiserverTransitioning = false }
         let result = await Shell.run(containerCLI, ["system", "stop"])

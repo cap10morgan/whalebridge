@@ -1,0 +1,114 @@
+diff --git a/Sources/socktainer/Utilities/ContainerResourceDefaults.swift b/Sources/socktainer/Utilities/ContainerResourceDefaults.swift
+index eadb89b..4693972 100644
+--- a/Sources/socktainer/Utilities/ContainerResourceDefaults.swift
++++ b/Sources/socktainer/Utilities/ContainerResourceDefaults.swift
+@@ -1,5 +1,6 @@
+ import ContainerAPIClient
+ import ContainerPersistence
++import Foundation
+ import Logging
+ import SystemPackage
+ 
+@@ -73,16 +74,36 @@ actor ContainerResourceDefaults {
+ /// `[container]` block was consulted at all.
+ enum ContainerResourceResolution {
+     /// Memory in bytes, or `nil` to leave `ContainerConfiguration` untouched.
++    ///
++    /// An embedder (e.g. Whalebridge) can set `SOCKTAINER_DEFAULT_MEMORY_PERCENT`
++    /// to size unlimited containers as a percentage of host RAM instead: Apple
++    /// Container's stock 1 GiB is too little for real workloads (a Node/vite
++    /// build can OOM well under it), and Docker's "no limit" has no VM
++    /// equivalent. When set, it takes precedence over the configured default.
+     static func memoryInBytes(
+         requested: Int?,
+-        configured: ContainerPersistence.ContainerConfig?
++        configured: ContainerPersistence.ContainerConfig?,
++        environment: [String: String] = ProcessInfo.processInfo.environment,
++        hostMemory: UInt64 = ProcessInfo.processInfo.physicalMemory
+     ) -> UInt64? {
+         if let requested, requested > 0 {
+             return UInt64(requested)
+         }
++        if let percent = defaultMemoryPercent(environment: environment), hostMemory > 0 {
++            return UInt64((Double(hostMemory) * percent / 100).rounded(.down))
++        }
+         return configured?.memory.toUInt64(unit: .bytes)
+     }
+ 
++    /// `SOCKTAINER_DEFAULT_MEMORY_PERCENT` as a percentage in (0, 100], or `nil`
++    /// when it is absent or invalid.
++    static func defaultMemoryPercent(environment: [String: String]) -> Double? {
++        guard let raw = environment["SOCKTAINER_DEFAULT_MEMORY_PERCENT"],
++            let value = Double(raw), value > 0, value <= 100
++        else { return nil }
++        return value
++    }
++
+     /// vCPU count, or `nil` to leave `ContainerConfiguration` untouched.
+     static func cpus(
+         requestedNanoCpus: Int?,
+diff --git a/Tests/socktainerTests/Utilities/ContainerResourceResolutionTests.swift b/Tests/socktainerTests/Utilities/ContainerResourceResolutionTests.swift
+index 1ddebee..4654158 100644
+--- a/Tests/socktainerTests/Utilities/ContainerResourceResolutionTests.swift
++++ b/Tests/socktainerTests/Utilities/ContainerResourceResolutionTests.swift
+@@ -86,4 +86,60 @@ struct ContainerResourceResolutionTests {
+         #expect(ContainerResourceResolution.memoryInBytes(requested: nil, configured: nil) == nil)
+         #expect(ContainerResourceResolution.cpus(requestedNanoCpus: nil, configured: nil) == nil)
+     }
++
++    // MARK: - SOCKTAINER_DEFAULT_MEMORY_PERCENT
++
++    private let sixteenGiB: UInt64 = 16 * 1024 * 1024 * 1024
++
++    @Test("the percent default sizes an unlimited container from host RAM, ahead of the configured default")
++    func percentDefaultWinsOverConfigured() throws {
++        let resolved = ContainerResourceResolution.memoryInBytes(
++            requested: nil,
++            configured: try configured(cpus: 6, memory: "4gb"),
++            environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "75"],
++            hostMemory: sixteenGiB
++        )
++        #expect(resolved == UInt64(12) * 1024 * 1024 * 1024)
++    }
++
++    @Test("the percent default applies when the configured defaults cannot be read")
++    func percentDefaultWithoutConfigured() {
++        let resolved = ContainerResourceResolution.memoryInBytes(
++            requested: 0,
++            configured: nil,
++            environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "50"],
++            hostMemory: sixteenGiB
++        )
++        #expect(resolved == UInt64(8) * 1024 * 1024 * 1024)
++    }
++
++    @Test("an explicit memory request still wins over the percent default")
++    func explicitMemoryWinsOverPercent() {
++        let resolved = ContainerResourceResolution.memoryInBytes(
++            requested: Int(twoGiB),
++            configured: nil,
++            environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "75"],
++            hostMemory: sixteenGiB
++        )
++        #expect(resolved == twoGiB)
++    }
++
++    @Test("an absent or invalid percent falls through to the configured default")
++    func invalidPercentFallsThrough() throws {
++        let config = try configured(cpus: 6, memory: "4gb")
++        #expect(
++            ContainerResourceResolution.memoryInBytes(
++                requested: nil, configured: config, environment: [:], hostMemory: sixteenGiB) == fourGiB)
++        for raw in ["not-a-number", "0", "-10", "100.5", ""] {
++            let env = ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": raw]
++            #expect(
++                ContainerResourceResolution.memoryInBytes(
++                    requested: nil, configured: config, environment: env, hostMemory: sixteenGiB) == fourGiB)
++        }
++    }
++
++    @Test("100 is the maximum accepted percent")
++    func percentMaxAccepted() {
++        #expect(ContainerResourceResolution.defaultMemoryPercent(environment: ["SOCKTAINER_DEFAULT_MEMORY_PERCENT": "100"]) == 100)
++    }
+ }

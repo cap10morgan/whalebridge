@@ -13,13 +13,18 @@ SOCKTAINER_BASE_VERSION = $(shell git -C vendor/socktainer describe --tags --exa
 SOCKTAINER_VERSION = $(SOCKTAINER_BASE_VERSION)-wb$(WB_REVISION)
 
 # Reset the submodule to its pinned tag, then apply our patches (see patches/)
-# so the vendor tree never carries hand edits between builds.
-.PHONY: daemon
-daemon:
+# so the vendor tree never carries hand edits between builds. Anything that
+# reads the vendored Package.swift (the required apple/container version)
+# must run this first, since a patch can move that pin.
+.PHONY: patch
+patch:
 	git submodule update --init
 	git -C vendor/socktainer checkout -- .
 	git -C vendor/socktainer clean -fd
 	set -e; for p in $(ROOT)/patches/*.patch; do git -C vendor/socktainer apply "$$p"; done
+
+.PHONY: daemon
+daemon: patch
 	# Tags aren't fetched by `submodule update` (CI checkouts especially), and
 	# the release-vs-sha distinction above needs them; offline is fine — the
 	# sha fallback still applies.
@@ -42,10 +47,13 @@ bundle: daemon app icons
 run: bundle
 	open build/Whalebridge.app
 
+# The apple/container version the patched socktainer pins. Recursive (=), so
+# it's read when a recipe runs, after its `patch` prerequisite: read at parse
+# time, an unpatched tree would give the pin before patches/ moves it.
+REQUIRED_CONTAINER_VERSION = $(shell sed -n 's|.*apple/container\.git", exact: "\([0-9.]*\)".*|\1|p' vendor/socktainer/Package.swift | head -1)
 # Run the app unbundled for quick iteration (daemon must be built).
-REQUIRED_CONTAINER_VERSION := $(shell sed -n 's|.*apple/container\.git", exact: "\([0-9.]*\)".*|\1|p' vendor/socktainer/Package.swift | head -1)
 .PHONY: dev
-dev:
+dev: patch
 	cd app && WHALEBRIDGE_DAEMON=$(DAEMON_BIN) WHALEBRIDGE_CONTAINER_VERSION=$(REQUIRED_CONTAINER_VERSION) \
 		WHALEBRIDGE_VERSION=$$(git rev-parse --short HEAD) swift run
 
@@ -62,7 +70,7 @@ vm-golden-image:
 # it over the Docker API — see scripts/vm-smoke-test.sh for what it covers.
 # Override which methods run with e.g. `make vm-smoke-test METHODS="cask zip local"`.
 .PHONY: vm-smoke-test
-vm-smoke-test:
+vm-smoke-test: patch
 	REQUIRED_CONTAINER_VERSION=$(REQUIRED_CONTAINER_VERSION) METHODS="$(METHODS)" bash scripts/vm-smoke-test.sh
 
 # Same as vm-smoke-test, but builds and installs the current working tree
@@ -70,7 +78,7 @@ vm-smoke-test:
 # there's no Homebrew equivalent to a formula's `head` build for this, since
 # casks only ever install pre-built artifacts.
 .PHONY: vm-smoke-test-local
-vm-smoke-test-local:
+vm-smoke-test-local: patch
 	REQUIRED_CONTAINER_VERSION=$(REQUIRED_CONTAINER_VERSION) METHODS=local bash scripts/vm-smoke-test.sh
 
 .PHONY: clean

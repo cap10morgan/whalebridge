@@ -98,6 +98,11 @@ jobs:
         with:
           name: socktainer
 
+      # Our patches can move socktainer's apple/container pin, so read it from
+      # the patched tree the artifact was built from, not the bare checkout.
+      - name: Apply patches
+        run: make patch
+
       - name: Install apple/container (the version socktainer pins)
         run: |
           chmod 755 socktainer

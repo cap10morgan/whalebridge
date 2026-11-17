@@ -6,6 +6,21 @@ All notable changes to Whalebridge are documented in this file.
 
 ### Added
 - The About window now shows when Whalebridge last checked for updates, under its Check for Updates… button, as Settings does.
+- A Settings checkbox to exclude container storage from Time Machine. It covers container filesystems and unpacked image layers, which can take many GB and which Apple considers recreatable. Images and volumes stay in backups, but changes made inside a container outside its volumes won't be restored. Apple's runtime 1.7 excludes these directories itself, but only when it creates them, so an install that predates 1.7 keeps backing them up until the checkbox is turned on. The checkbox shows the directories' current setting, including one made with `tmutil`, and Whalebridge doesn't change it unless you do.
+
+### Changed
+- Whalebridge now requires Apple's container runtime 1.7.x. A Whalebridge with 1.6.x installed reports it as too old and offers to download and install Apple's signed 1.7 installer, as it does for any outdated runtime. Once 1.7 is installed, Whalebridge restarts Apple's container services, which stops any running containers; start them again afterwards. Existing containers, images and volumes are kept. The bundled socktainer daemon is built against 1.7.1 (patched locally until socktainer#516 is released), and must be. 1.7's builder image runs BuildKit v0.34.1 (up from v0.29.0), and it rejects connections from Apple's builder code before 1.7 (apple/container#2428). A socktainer built for 1.6 failed every `docker build` once `container build` had started that builder. The rebuild also fixes a `COPY` of more than one file failing with "not found" when a later `RUN` step has a tmpfs mount (apple/container#2405).
+- After a runtime upgrade, Whalebridge now moves the default Linux kernel to the one the new runtime recommends (for 1.7, kata 4.3.1's 6.18.56 kernel, up from 6.18.35). Upgrading the runtime alone doesn't, so upgraded installs kept starting new containers on the kernel the old runtime recommended. It downloads in the background once Whalebridge is running (about 680 MB), and the menu shows it until it finishes; containers started before then use the old kernel. Existing containers keep the kernel they were created with. Only a kernel an earlier runtime recommended is replaced, so a custom kernel stays, and the check runs once per runtime version.
+- Updated the bundled socktainer daemon to v1.6.1. It includes the `docker build -q` and healthcheck probe fixes 0.7.0 patched in locally, so those patches are dropped, as is our local 409 for a container name that's already taken, now handled upstream (socktainer#478). One behavior change to be aware of: socktainer no longer rewrites other containers' hostnames in environment variable values, as Docker doesn't; a container that relied on it can opt back in with the `socktainer.rewrite-peer-hostnames=true` label (socktainer#506).
+
+### Fixed
+- `docker compose up` failed with "Invalid JSON request body" for a service with an anonymous volume (`volumes: [/data]`) (socktainer#477).
+- `docker inspect` reported exit code 0 for every stopped container, so a client polling it saw every failure as success (socktainer#494).
+- A container that was created but never started was reported as `exited` instead of `created`, so `docker ps --filter status=created` never matched it, which broke Compose services with a `pre_start` hook (socktainer#507).
+- The `label` filter on image lists was ignored, so a client that removes the images it lists by label removed all of them (socktainer#492).
+- Bind mounts of a host Unix socket (any source ending in `.sock` or `.socket`) were silently dropped; they are now passed through to the container (socktainer#496).
+- Compose couldn't recreate a service that sets `hostname:`. A taken hostname or alias is also no longer reported as a conflict over the container name (socktainer#509).
+- `docker cp` into a path under a volume or bind mount silently lost the files, and copying out of one returned "not found" (socktainer#511). This broke act and forgejo-runner, which copy their step scripts into a volume.
 
 ## [0.7.0] - 2026-10-27
 

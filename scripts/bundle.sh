@@ -44,6 +44,20 @@ SUPUBLIC_ED_KEY="${SUPUBLIC_ED_KEY:-hMwzmzzRFbLpZ4YmzHAxM8v1Py1WV7vEhItZ4n8oQLI=
 # install exactly this version on first run.
 REQUIRED_CONTAINER_VERSION="$(sed -n 's|.*apple/container\.git", exact: "\([0-9.]*\)".*|\1|p' "$ROOT/vendor/socktainer/Package.swift" | head -1)"
 [[ -n "$REQUIRED_CONTAINER_VERSION" ]] || { echo "could not read apple/container version from vendor/socktainer/Package.swift" >&2; exit 1; }
+# The app replaces a default kernel that an earlier runtime recommended
+# (DaemonManager.earlierRecommendedKernels). If a runtime bump changes the
+# recommended kernel without the outgoing one being added there, upgraded
+# installs would silently keep it, so fail until DaemonManager catches up.
+CONTAINER_CONFIG="$ROOT/vendor/socktainer/.build/checkouts/container/Sources/ContainerPersistence/ContainerSystemConfig.swift"
+VENDORED_KERNEL="$(sed -n 's|.*defaultBinaryPath = "\(.*\)".*|\1|p' "$CONTAINER_CONFIG" 2>/dev/null | head -1)"
+VENDORED_KERNEL="${VENDORED_KERNEL##*/}"
+[[ -n "$VENDORED_KERNEL" ]] || { echo "could not read the recommended kernel from $CONTAINER_CONFIG" >&2; exit 1; }
+APP_KERNEL="$(sed -n 's|.*static let recommendedKernel = "\(.*\)".*|\1|p' "$ROOT/app/Sources/Whalebridge/DaemonManager.swift")"
+[[ "$VENDORED_KERNEL" == "$APP_KERNEL" ]] || {
+    echo "apple/container now recommends kernel $VENDORED_KERNEL, but DaemonManager.recommendedKernel is $APP_KERNEL:" >&2
+    echo "add $APP_KERNEL to earlierRecommendedKernels and set recommendedKernel to $VENDORED_KERNEL" >&2
+    exit 1
+}
 
 for bin in "$APP_BIN" "$DAEMON_BIN"; do
     [[ -x "$bin" ]] || { echo "missing $bin — run make bundle" >&2; exit 1; }
