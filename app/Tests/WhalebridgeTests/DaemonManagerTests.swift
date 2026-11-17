@@ -41,28 +41,15 @@ import Testing
     }
 }
 
-/// `defaultKernelPath` finds where apple/container keeps its default kernel
-/// from `container system status` output, since there's no command that
-/// reports the kernel itself.
+/// `defaultKernelPath` finds the default-kernel symlink in the app root that
+/// `container system status` reports, since there's no command that reports
+/// the kernel itself.
 @Suite struct DefaultKernelPathTests {
-    @Test func readsAppRootFromStatusOutput() {
-        let output = """
-            FIELD               VALUE
-            status              running
-            paths.appRoot       /Users/me/Library/Application Support/com.apple.container/
-            paths.installRoot   /usr/local/
-            """
+    @Test func isTheArchitecturesSymlinkUnderKernels() {
+        let appRoot = URL(fileURLWithPath: "/Users/me/Library/Application Support/com.apple.container/", isDirectory: true)
         #expect(
-            DaemonManager.defaultKernelPath(statusOutput: output, architecture: "arm64")
+            DaemonManager.defaultKernelPath(appRoot: appRoot)
                 == "/Users/me/Library/Application Support/com.apple.container/kernels/default.kernel-arm64")
-    }
-
-    @Test func missingAppRootReturnsNil() {
-        #expect(DaemonManager.defaultKernelPath(statusOutput: "status  running", architecture: "arm64") == nil)
-    }
-
-    @Test func emptyAppRootReturnsNil() {
-        #expect(DaemonManager.defaultKernelPath(statusOutput: "paths.appRoot       ", architecture: "arm64") == nil)
     }
 }
 
@@ -77,6 +64,11 @@ import Testing
         #expect(
             DaemonManager.appRoot(statusOutput: output)?.appending(path: "snapshots").path
                 == "/Users/me/Library/Application Support/com.apple.container/snapshots")
+    }
+
+    @Test func missingOrEmptyAppRootRowGivesNil() {
+        #expect(DaemonManager.appRoot(statusOutput: "status  running") == nil)
+        #expect(DaemonManager.appRoot(statusOutput: "paths.appRoot       ") == nil)
     }
 
     @Test func stoppedApiserverReportsNoAppRoot() {
@@ -112,8 +104,8 @@ import Testing
     }
 
     @Test func earlierRecommendedKernelsExcludeTheCurrentOne() {
-        // 1.6's recommendation is outdated under 1.7; 1.7's own isn't.
+        #expect(!DaemonManager.earlierRecommendedKernels.contains(DaemonManager.recommendedKernel))
+        // 1.6's recommendation is outdated under 1.7.
         #expect(DaemonManager.earlierRecommendedKernels.contains("vmlinux-6.18.35-197-debug"))
-        #expect(!DaemonManager.earlierRecommendedKernels.contains("vmlinux-6.18.56-208-debug"))
     }
 }

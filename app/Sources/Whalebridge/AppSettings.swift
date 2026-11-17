@@ -74,6 +74,8 @@ final class AppSettings: ObservableObject {
         let appRoot = await DaemonManager.shared.containerAppRoot()
         containerStorageDirectories = BackupExclusion.directories(appRoot: appRoot)
         timeMachineExclusion = BackupExclusion.state(of: containerStorageDirectories)
+        // A failed toggle's error is stale once the state has been re-read.
+        timeMachineExclusionError = nil
     }
 
     func setExcludeFromTimeMachine(_ excluded: Bool) {
