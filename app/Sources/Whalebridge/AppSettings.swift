@@ -188,6 +188,11 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // A grouped Form scrolls and has no height of its own, so the window
+        // came out shorter than the settings and hid the first one. Size it
+        // to its content instead; the window follows.
+        .scrollDisabled(true)
+        .fixedSize(horizontal: false, vertical: true)
         .frame(width: 420)
         .task { await settings.refreshTimeMachineExclusion() }
         .onAppear {
