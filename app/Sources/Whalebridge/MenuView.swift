@@ -63,6 +63,9 @@ struct MenuView: View {
         if let error = daemon.installError {
             Text("Install failed: \(error)")
         }
+        if daemon.kernelUpdateInProgress {
+            Text("Downloading the recommended Linux kernel…")
+        }
 
         if daemon.state == .running {
             Button("Stop Whalebridge") { daemon.stop() }

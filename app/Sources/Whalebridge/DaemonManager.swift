@@ -65,10 +65,14 @@ final class DaemonManager: ObservableObject {
     @Published private(set) var installProgress: String?
     @Published private(set) var installError: String?
     @Published private(set) var isDefaultContext = DockerContext.isDefault
+    /// True while the recommended kernel downloads after a runtime upgrade.
+    @Published private(set) var kernelUpdateInProgress = false
 
     private let previousContextKey = "previousDockerContext"
     private let firstRunContextKey = "didFirstRunContextSetup"
     private let verifiedApiserverVersionKey = "verifiedApiserverVersion"
+    private let kernelCheckedVersionKey = "recommendedKernelCheckedVersion"
+    private var kernelUpdateTask: Task<Void, Never>?
     private var offeredInstallThisLaunch = false
     private(set) var isTerminating = false
 
@@ -280,7 +284,7 @@ final class DaemonManager: ObservableObject {
             "SOCKTAINER_PLATFORM_NAME": "Whalebridge",
             "SOCKTAINER_PLATFORM_VERSION": AppVersion.current,
             // Default memory limit for containers that don't request their own
-            // (patches/0002-create-conflict-and-default-memory.patch),
+            // (patches/0002-default-memory-percent.patch),
             // configurable in Settings.
             "SOCKTAINER_DEFAULT_MEMORY_PERCENT": "\(AppSettings.shared.defaultContainerMemoryPercent)",
         ]
@@ -310,6 +314,7 @@ final class DaemonManager: ObservableObject {
         // stop() or an early daemon exit may have moved us on while we waited.
         guard state == .starting else { return }
         state = .running
+        updateOutdatedKernel(runtimeVersion: version)
         try? DockerContext.ensureContext(socketPath: socketPath)
         performFirstRunContextSetup()
     }
@@ -459,6 +464,72 @@ final class DaemonManager: ObservableObject {
         if result.status != 0 {
             NSLog("container system kernel set exited \(result.status): \(result.output)")
         }
+    }
+
+    /// Default kernels that earlier apple/container releases recommended: the
+    /// file name `container system kernel set --recommended` installs, from
+    /// `KernelConfig.defaultBinaryPath`. When a runtime bump changes the
+    /// recommended kernel, add the one it replaces here.
+    nonisolated static let earlierRecommendedKernels: Set<String> = [
+        "vmlinux-6.12.28-153",  // 0.1–0.8
+        "vmlinux-6.18.5-177",  // 0.9–0.11
+        "vmlinux-6.18.15-186",  // 0.12–1.2
+        "vmlinux-6.18.35-197-debug",  // 1.3–1.6
+    ]
+
+    /// The file name of the kernel the default-kernel symlink at `path` points
+    /// to, or nil when there's no symlink there.
+    nonisolated static func kernelName(linkedFrom path: String) -> String? {
+        guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: path) else { return nil }
+        return URL(fileURLWithPath: target).lastPathComponent
+    }
+
+    /// Moves the default kernel to the one the installed runtime recommends,
+    /// when it's still one an earlier runtime recommended. Upgrading the
+    /// runtime doesn't: `system start` only installs a kernel when none is
+    /// configured, so upgraded installs kept booting new containers on the old
+    /// one. A kernel set any other way is left alone.
+    ///
+    /// Checked once per runtime version, so a kernel set back by hand stays
+    /// until the next upgrade. Runs after the daemon is up because the
+    /// download is several hundred MB; until it finishes, new containers boot
+    /// the old kernel. Existing containers keep the kernel they were created
+    /// with: they record its file, which stays in place.
+    private func updateOutdatedKernel(runtimeVersion: String) {
+        guard kernelUpdateTask == nil,
+            UserDefaults.standard.string(forKey: kernelCheckedVersionKey) != runtimeVersion
+        else { return }
+        kernelUpdateTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.kernelUpdateTask = nil }
+            guard let outdated = await self.defaultKernelIsEarlierRecommended() else { return }
+            if outdated {
+                NSLog("default kernel is one an earlier runtime recommended — installing \(runtimeVersion)'s")
+                self.kernelUpdateInProgress = true
+                // --force: the recommended kernel's file may already be there
+                // without being the default, and installing over it would fail.
+                let result = await Shell.run(
+                    self.containerCLI, ["system", "kernel", "set", "--recommended", "--force"])
+                self.kernelUpdateInProgress = false
+                guard result.status == 0 else {
+                    // Left unchecked, so the next start tries again.
+                    NSLog("container system kernel set exited \(result.status): \(result.output)")
+                    return
+                }
+            }
+            UserDefaults.standard.set(runtimeVersion, forKey: self.kernelCheckedVersionKey)
+        }
+    }
+
+    /// Whether the default kernel is one an earlier runtime recommended, or nil
+    /// when that can't be told (the apiserver isn't answering).
+    private func defaultKernelIsEarlierRecommended() async -> Bool? {
+        let status = await Shell.run(containerCLI, ["system", "status"])
+        guard status.status == 0,
+            let path = DaemonManager.defaultKernelPath(statusOutput: status.output, architecture: "arm64")
+        else { return nil }
+        guard let name = DaemonManager.kernelName(linkedFrom: path) else { return false }
+        return DaemonManager.earlierRecommendedKernels.contains(name)
     }
 
     /// `container system stop` on an already-stopped service is a harmless

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import Whalebridge
@@ -80,5 +81,39 @@ import Testing
 
     @Test func stoppedApiserverReportsNoAppRoot() {
         #expect(DaemonManager.appRoot(statusOutput: "apiserver is not running and not registered with launchd") == nil)
+    }
+}
+
+/// After a runtime upgrade, Whalebridge moves the default kernel to the new
+/// recommended one only when it's still a kernel an earlier runtime
+/// recommended, which it tells from the default-kernel symlink's target.
+@Suite struct OutdatedKernelTests {
+    let directory: URL
+
+    init() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appending(path: "OutdatedKernelTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    @Test func readsTheKernelTheDefaultSymlinkPointsTo() throws {
+        let kernel = directory.appending(path: "vmlinux-6.18.35-197-debug")
+        try Data().write(to: kernel)
+        let link = directory.appending(path: "default.kernel-arm64")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: kernel)
+        #expect(DaemonManager.kernelName(linkedFrom: link.path) == "vmlinux-6.18.35-197-debug")
+    }
+
+    @Test func noSymlinkMeansNoKernelName() throws {
+        #expect(DaemonManager.kernelName(linkedFrom: directory.appending(path: "default.kernel-arm64").path) == nil)
+        let plainFile = directory.appending(path: "default.kernel-arm64")
+        try Data().write(to: plainFile)
+        #expect(DaemonManager.kernelName(linkedFrom: plainFile.path) == nil)
+    }
+
+    @Test func earlierRecommendedKernelsExcludeTheCurrentOne() {
+        // 1.6's recommendation is outdated under 1.7; 1.7's own isn't.
+        #expect(DaemonManager.earlierRecommendedKernels.contains("vmlinux-6.18.35-197-debug"))
+        #expect(!DaemonManager.earlierRecommendedKernels.contains("vmlinux-6.18.56-208-debug"))
     }
 }
